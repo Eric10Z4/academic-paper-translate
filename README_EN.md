@@ -31,7 +31,7 @@ Most generic AI translation tools fail on scientific papers:
 - 📐 **100% Math & Layout Preservation**: Preserves all equations, tables, figures, and `\cite` / `\ref` cross-references.
 - 📝 **Zotero Official Prompt Aligned**: Reuses the proven academic translation prompt from Zotero PDF Translate.
 - ⚡ **Paragraph-by-Paragraph Concurrency**: Prevents context drift and term deformation by translating natural paragraphs in parallel.
-- 🔌 **Pluggable Backends**: Out-of-the-box adapters for CPA (Gemini 3.8 Flash High), DeepSeek (V3/R1), OpenAI, and local Ollama.
+- 🔌 **Pluggable Backends**: Out-of-the-box adapters for DeepSeek (V3/R1), OpenAI (GPT-4o-mini), and local Ollama.
 - 🤖 **Hermes Agent Ready**: Includes native `SKILL.md` for AI agent workflows.
 
 ---
@@ -51,13 +51,13 @@ pip install pdf2zh-next  # Optional, for direct PDF processing
 
 #### 1. One-click arXiv Paper Translation (Recommended)
 ```bash
-python scripts/zotero_translate.py --arxiv "2201.02609" --output-zip "GCD_paper_zh.zip"
+python scripts/zotero_translate.py --arxiv "2201.02609" --provider deepseek --output-zip "GCD_paper_zh.zip"
 ```
 Upload `GCD_paper_zh.zip` to Overleaf and click **Recompile** for native, publication-grade dual-column output!
 
 #### 2. Local LaTeX Project Translation
 ```bash
-python scripts/zotero_translate.py --dir "./my_paper_source" --output-zip "./translated_source.zip"
+python scripts/zotero_translate.py --dir "./my_paper_source" --provider deepseek --output-zip "./translated_source.zip"
 ```
 
 #### 3. Direct PDF Translation (Bilingual Side-by-Side)
@@ -69,7 +69,7 @@ python scripts/zotero_translate.py --pdf "./paper.pdf" --output-dir "./output"
 
 ## 📊 Token Usage Benchmark (Real-world Data)
 
-Tested on top-tier conference papers using `gemini-3.8-flash-high`:
+Tested on top-tier conference papers:
 
 | Paper | Scope | Chunks | Prompt Tokens | Completion Tokens | Reasoning Tokens | Total Tokens |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
