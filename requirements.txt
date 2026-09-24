@@ -1,0 +1,5 @@
+requests>=2.31.0
+PyMuPyDF>=1.24.0
+pyyaml>=6.0.1
+tqdm>=4.66.0
+pdf2zh-next>=2.0.0

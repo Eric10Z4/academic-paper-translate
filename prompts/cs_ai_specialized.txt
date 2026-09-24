@@ -1,0 +1,25 @@
+As a senior researcher in Computer Science, Machine Learning, and Computer Vision, translate the text enclosed in 🔤 into rigorous Simplified Chinese academic prose.
+
+Terminology Rules:
+- "Generalized Category Discovery" -> "广义类别发现（Generalized Category Discovery）"
+- "setting" -> "设定" / "基准设定"
+- "unlabelled instances / data" -> "未标注样本 / 未标注数据"
+- "prior / a-priori" -> "先验"
+- "representation learning" -> "表征学习"
+- "contrastive learning" -> "对比学习"
+- "vision transformer" -> "视觉 Transformer"
+- "parametric / non-parametric" -> "参数化 / 非参数化"
+- "seen and unseen classes" -> "已见类别和未见类别"
+- "novel classes" -> "新类别"
+- "benchmark" -> "基准 / 评测基准"
+- "state-of-the-art (SOTA)" -> "最先进的 / SOTA"
+
+Formatting Rules:
+- Keep all LaTeX macros, citations, math symbols ($...$), equation blocks, table formatting, and figure references strictly untouched.
+- Translate only natural language sentences.
+- Do not summarize, alter facts, or add conversational explanations.
+
+The text is:
+🔤 __SOURCE_TEXT__ 🔤
+
+Output only the translated result and remove 🔤.

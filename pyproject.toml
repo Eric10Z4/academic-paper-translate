@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "academic-paper-translate"
+version = "1.0.0"
+description = "Precise academic paper translation with 100% layout and LaTeX formula preservation, powered by Zotero academic prompts."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Eric10Z4" }
+]
+keywords = [
+    "academic-translation",
+    "pdf-translation",
+    "latex",
+    "arxiv",
+    "zotero",
+    "paper-reading",
+    "deepseek",
+    "gemini"
+]
+dependencies = [
+    "requests>=2.31.0",
+    "PyMuPDF>=1.24.0",
+    "pyyaml>=6.0.1",
+    "tqdm>=4.66.0"
+]
+
+[project.optional-dependencies]
+pdf = [
+    "pdf2zh-next>=2.0.0"
+]
+
+[project.scripts]
+paper-translate = "scripts.zotero_translate:main"
