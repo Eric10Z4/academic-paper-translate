@@ -1,0 +1,47 @@
+# Academic Paper Translate Configuration
+
+# Default translation provider: cpa | deepseek | openai | ollama
+provider: "cpa"
+
+# Provider Settings
+providers:
+  # Local CPA / Cherry Studio Antigravity Proxy (Free / Gemini 3.8 Flash High)
+  cpa:
+    base_url: "http://127.0.0.1:8317/v1"
+    api_key: "sk-eric10z4"
+    model: "gemini-3.8-flash-high"
+    timeout: 60
+    # Mandatory for local proxy to avoid 502 / proxy loop:
+    bypass_local_proxy: true
+
+  # DeepSeek official / SiliconFlow API
+  deepseek:
+    base_url: "https://api.deepseek.com/v1"
+    api_key: "your-deepseek-api-key"
+    model: "deepseek-chat"
+    timeout: 60
+
+  # Standard OpenAI-Compatible Endpoint
+  openai:
+    base_url: "https://api.openai.com/v1"
+    api_key: "your-openai-api-key"
+    model: "gpt-4o-mini"
+    timeout: 60
+
+  # Local Ollama
+  ollama:
+    base_url: "http://127.0.0.1:11434/v1"
+    api_key: "ollama"
+    model: "qwen2.5:14b"
+    timeout: 120
+
+# Translation Parameters
+translation:
+  lang_in: "English"
+  lang_out: "Simplified Chinese"
+  # Default prompt template path (relative to repo root)
+  prompt_template: "prompts/zotero_default.txt"
+  # Parallel workers for paragraph-by-paragraph translation
+  workers: 4
+  # Whether to inject Chinese CTEX package into LaTeX main entry
+  inject_ctex: true

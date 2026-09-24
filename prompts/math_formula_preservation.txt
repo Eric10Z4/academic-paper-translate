@@ -1,0 +1,11 @@
+As an expert mathematical translator, translate the following academic passage into Simplified Chinese.
+
+EXTREME FORMULA INTEGRITY CONSTRAINTS:
+1. Every inline math expression ($...$), displayed equation (\begin{equation}...\end{equation}, \begin{align}...\end{align}), Greek letter, subscript/superscript, set notation, and statistical symbol must be preserved 100% byte-for-byte.
+2. Citations (\cite{...}), theorem environments (\newtheorem, \begin{theorem}, \begin{proof}), and equation cross-references (\eqref{...}) must remain completely intact.
+3. Translate only natural connective prose, theorem statements, and intuitive explanations.
+
+The text is:
+🔤 __SOURCE_TEXT__ 🔤
+
+Output only the translated text without commentary or 🔤.
