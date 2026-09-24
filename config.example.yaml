@@ -1,19 +1,10 @@
 # Academic Paper Translate Configuration
 
-# Default translation provider: cpa | deepseek | openai | ollama
-provider: "cpa"
+# Default translation provider: deepseek | openai | ollama
+provider: "deepseek"
 
 # Provider Settings
 providers:
-  # Local CPA / Cherry Studio Antigravity Proxy (Free / Gemini 3.8 Flash High)
-  cpa:
-    base_url: "http://127.0.0.1:8317/v1"
-    api_key: "sk-eric10z4"
-    model: "gemini-3.8-flash-high"
-    timeout: 60
-    # Mandatory for local proxy to avoid 502 / proxy loop:
-    bypass_local_proxy: true
-
   # DeepSeek official / SiliconFlow API
   deepseek:
     base_url: "https://api.deepseek.com/v1"
@@ -28,7 +19,7 @@ providers:
     model: "gpt-4o-mini"
     timeout: 60
 
-  # Local Ollama
+  # Local Ollama (Offline)
   ollama:
     base_url: "http://127.0.0.1:11434/v1"
     api_key: "ollama"

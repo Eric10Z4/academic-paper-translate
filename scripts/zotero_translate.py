@@ -8,16 +8,14 @@ import tarfile
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 
-# Try relative import for adapter, fallback to local implementation
 try:
-    from adapters.cpa_adapter import CPAAdapter
     from adapters.deepseek_adapter import DeepSeekAdapter
+    from adapters.openai_adapter import OpenAIAdapter
     from adapters.ollama_adapter import OllamaAdapter
 except ImportError:
-    # If invoked directly as a standalone script
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from adapters.cpa_adapter import CPAAdapter
     from adapters.deepseek_adapter import DeepSeekAdapter
+    from adapters.openai_adapter import OpenAIAdapter
     from adapters.ollama_adapter import OllamaAdapter
 
 DEFAULT_PROMPT_TEMPLATE = """As an academic expert with specialized knowledge in various fields, please provide a proficient and precise translation from English to Simplified Chinese of the academic text enclosed in 🔤. It is crucial to maintaining the original phrase or sentence and ensure accuracy while utilizing the appropriate language. Keep all LaTeX markup, math notation ($...$, equations), citations (\\cite{...}), references (\\ref{...}), and environment tags intact. Translate only the natural language text. The text is as follows:
@@ -26,17 +24,34 @@ DEFAULT_PROMPT_TEMPLATE = """As an academic expert with specialized knowledge in
 
 Please provide the translated result without any additional explanation and remove 🔤."""
 
-def get_adapter(provider="cpa", config=None):
+def get_adapter(provider="deepseek", config=None, api_key=None, base_url=None, model=None):
     if config and "providers" in config and provider in config["providers"]:
         cfg = config["providers"][provider]
-        if provider == "cpa":
-            return CPAAdapter(base_url=cfg.get("base_url"), api_key=cfg.get("api_key"), model=cfg.get("model"))
-        elif provider == "deepseek":
-            return DeepSeekAdapter(base_url=cfg.get("base_url"), api_key=cfg.get("api_key"), model=cfg.get("model"))
+        b_url = base_url or cfg.get("base_url")
+        key = api_key or cfg.get("api_key")
+        mod = model or cfg.get("model")
+        if provider == "deepseek":
+            return DeepSeekAdapter(base_url=b_url, api_key=key, model=mod)
+        elif provider == "openai":
+            return OpenAIAdapter(base_url=b_url, api_key=key, model=mod)
         elif provider == "ollama":
-            return OllamaAdapter(base_url=cfg.get("base_url"), api_key=cfg.get("api_key"), model=cfg.get("model"))
-    # Default fallback
-    return CPAAdapter()
+            return OllamaAdapter(base_url=b_url, api_key=key, model=mod)
+
+    # Defaults from CLI args or environment variables
+    if provider == "deepseek":
+        b_url = base_url or os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+        key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
+        mod = model or "deepseek-chat"
+        return DeepSeekAdapter(base_url=b_url, api_key=key, model=mod)
+    elif provider == "ollama":
+        b_url = base_url or os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434/v1")
+        mod = model or "qwen2.5:14b"
+        return OllamaAdapter(base_url=b_url, api_key="ollama", model=mod)
+    else: # openai
+        b_url = base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        mod = model or "gpt-4o-mini"
+        return OpenAIAdapter(base_url=b_url, api_key=key, model=mod)
 
 def split_into_paragraphs(tex_content):
     return re.split(r'(\n\s*\n+)', tex_content)
@@ -45,7 +60,7 @@ def translate_tex_file(file_path, output_path=None, adapter=None, prompt_templat
     if output_path is None:
         output_path = file_path
     if adapter is None:
-        adapter = CPAAdapter()
+        adapter = get_adapter("deepseek")
     if prompt_template is None:
         prompt_template = DEFAULT_PROMPT_TEMPLATE
 
@@ -141,12 +156,15 @@ def main():
     parser.add_argument("--pdf", help="Translate local PDF file directly (requires pdf2zh-next)")
     parser.add_argument("--output-dir", help="Output directory for generated files")
     parser.add_argument("--output-zip", help="Path to save the translated project zip")
-    parser.add_argument("--provider", default="cpa", choices=["cpa", "deepseek", "ollama"], help="LLM provider")
+    parser.add_argument("--provider", default="deepseek", choices=["deepseek", "openai", "ollama"], help="LLM provider")
+    parser.add_argument("--api-key", help="API key for the chosen provider")
+    parser.add_argument("--base-url", help="Base URL for the chosen provider")
+    parser.add_argument("--model", help="Model name for the chosen provider")
     parser.add_argument("--prompt-file", help="Custom prompt template file path")
     parser.add_argument("--workers", type=int, default=4, help="Parallel worker threads (default: 4)")
     args = parser.parse_args()
 
-    adapter = get_adapter(args.provider)
+    adapter = get_adapter(args.provider, api_key=args.api_key, base_url=args.base_url, model=args.model)
     prompt_tpl = DEFAULT_PROMPT_TEMPLATE
     if args.prompt_file and os.path.exists(args.prompt_file):
         with open(args.prompt_file, "r", encoding="utf-8") as f:

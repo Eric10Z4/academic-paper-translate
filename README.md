@@ -31,7 +31,7 @@
 - 📐 **100% 格式与公式保留**：所有数学符号、表格结构、矢量图与文献引用（`\cite`、`\ref`）完好无损。
 - 📝 **内置 Zotero 官方插件原版提示词**：直接复用科研界最认可的学术 Prompt，专有名词（如“广义类别发现”、“对比表征学习”、“半监督 $k$-means”）精准规范。
 - ⚡ **逐段独立并发请求（Paragraph-by-Paragraph）**：将全文拆分为自然段落并发请求，避免长文本导致的上下文漂移与术语变形。
-- 🔌 **多后端适配器支持**：内置开箱即用的 CPA（Gemini 3.8 Flash High 免费通道）、DeepSeek（V3 / R1）、OpenAI 以及本地 Ollama 适配器。
+- 🔌 **多后端适配器支持**：内置开箱即用的 DeepSeek（V3 / R1）、OpenAI（GPT-4o-mini 等）以及本地 Ollama 离线适配器。
 - 🤖 **Hermes Agent 技能即插即用**：提供标准 `SKILL.md`，可直接作为 AI Agent 的 procedural skill 使用。
 
 ---
@@ -53,9 +53,9 @@ academic-paper-translate/
 │   └── math_formula_preservation.txt # 重度数学公式保护提示词
 ├── adapters/                         # 模型适配器
 │   ├── base.py                       # 基础适配器抽象类
-│   ├── cpa_adapter.py                # CPA / Gemini 代理适配器
 │   ├── deepseek_adapter.py           # DeepSeek 官方适配器
-│   └── ollama_adapter.py             # 本地 Ollama 适配器
+│   ├── openai_adapter.py             # 标准 OpenAI 兼容适配器
+│   └── ollama_adapter.py             # 本地 Ollama 离线适配器
 ├── scripts/                          # 核心执行脚本
 │   ├── zotero_translate.py           # 核心统一命令行工具
 │   └── pdf_runner.py                 # PDF 版面分析调用器
@@ -89,7 +89,10 @@ pip install pdf2zh-next
 ```bash
 cp config.example.yaml config.yaml
 ```
-根据需要修改 `config.yaml`。默认支持本地 CPA 代理（`http://127.0.0.1:8317/v1`，免 API Key 消费），也可填写 DeepSeek 或 OpenAI 的 API Key。
+根据需要修改 `config.yaml`。默认填写 DeepSeek API Key（性价比极高）或 OpenAI API Key。也可以直接通过环境变量传递：
+```bash
+export DEEPSEEK_API_KEY="your-api-key"
+```
 
 ---
 
@@ -98,13 +101,13 @@ cp config.example.yaml config.yaml
 ### 场景 1：arXiv 论文一键逐段精翻（最推荐，100% 顶会原排版）
 只需输入 arXiv 编号，脚本会自动下载官方源码、逐段调用学术 Prompt 精翻、注入中文宏包并打包为 ZIP：
 ```bash
-python scripts/zotero_translate.py --arxiv "2201.02609" --output-zip "GCD_paper_zh.zip"
+python scripts/zotero_translate.py --arxiv "2201.02609" --provider deepseek --output-zip "GCD_paper_zh.zip"
 ```
 > **交付物**：生成的 `GCD_paper_zh.zip` 直接上传到 [Overleaf](https://www.overleaf.com) 点击 Recompile，即可获得完美的矢量级中文双栏顶会论文！
 
 ### 场景 2：已有本地 LaTeX 工程批量翻译
 ```bash
-python scripts/zotero_translate.py --dir "./my_paper_source" --output-zip "./translated_source.zip"
+python scripts/zotero_translate.py --dir "./my_paper_source" --provider deepseek --output-zip "./translated_source.zip"
 ```
 
 ### 场景 3：本地 PDF 自动化版面翻译（生成中英对照 PDF）
@@ -119,7 +122,7 @@ python scripts/zotero_translate.py --pdf "./sample_paper.pdf" --output-dir "./ou
 
 ## 📊 真实顶会论文 Token 消耗基准评估
 
-在项目实测中，针对两篇顶会论文进行了完整的 Token 消耗统计分析（后端为 `gemini-3.8-flash-high`）：
+在项目实测中，针对两篇顶会论文进行了完整的 Token 消耗统计分析：
 
 | 论文评测样本 | 篇幅与结构 | 翻译文本块数量 | 输入 Tokens | 译文输出 Tokens | 推理思考 Tokens | **实际总 Token 消耗** |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
@@ -127,8 +130,7 @@ python scripts/zotero_translate.py --pdf "./sample_paper.pdf" --output-dir "./ou
 | **《SimGCD》 (ICCV 2023)** | 15 页长文（正文+附录+图表） | 545 个段落 | 106,006 | 31,929 | ~261,800 | **约 40.0 万 Tokens** (~400K) |
 
 - **成本说明**：
-  - 走本地 CPA / Antigravity 代理完全在免费配额内运行（**0 元成本**）；
-  - 若调用商业 API（如 DeepSeek-V3 约 ¥1~2 / 1M tokens），单篇 10~15 页顶会论文的成本仅约 **0.2 ~ 0.8 元人民币**，远低于商业翻译软件按页计费的成本。
+  - 调用 DeepSeek-V3（约 ¥1~2 / 1M tokens），单篇 10~15 页顶会论文的成本仅约 **0.2 ~ 0.8 元人民币**，远低于商业翻译软件按页计费（每页 0.5~1元）的成本。
 
 ---
 
