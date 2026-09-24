@@ -67,17 +67,6 @@ python scripts/zotero_translate.py --pdf "./paper.pdf" --output-dir "./output"
 
 ---
 
-## 📊 Token Usage Benchmark (Real-world Data)
-
-Tested on top-tier conference papers:
-
-| Paper | Scope | Chunks | Prompt Tokens | Completion Tokens | Reasoning Tokens | Total Tokens |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **GCD (CVPR 2022)** | 10 Pages (Main + Refs) | 153 | 42,387 | 15,374 | ~106,400 | **~164K** |
-| **SimGCD (ICCV 2023)** | 15 Pages (Main + Supp + Figures) | 545 | 106,006 | 31,929 | ~261,800 | **~400K** |
-
----
-
 ## 📄 License
 
 MIT License. See [LICENSE](LICENSE) for details.
