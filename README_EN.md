@@ -28,10 +28,14 @@ Most generic AI translation tools fail on scientific papers:
 ## ✨ Features
 
 - 🎯 **Zero Fluff**: Strictly 1:1 translation with no unsolicited summaries or chatting.
-- 📐 **100% Math & Layout Preservation**: Preserves all equations, tables, figures, and `\cite` / `\ref` cross-references.
+- 📐 **100% Math & Layout Preservation**: Preserves all equations, tables, figures, and `\cite` / `
+ef` cross-references.
+- 📊 **Table & Experimental Data Freeze (Highest Priority)**: Numerical values, metric columns, and benchmark names in tables are 100% untouched; only `\caption` is translated.
+- 🔍 **Auto arXiv Source Pipeline**: Resolves arXiv IDs from PDF text or titles, downloads e-print packages, and falls back to PDF layout translation if source is unavailable.
 - 📝 **Zotero Official Prompt Aligned**: Reuses the proven academic translation prompt from Zotero PDF Translate.
 - ⚡ **Paragraph-by-Paragraph Concurrency**: Prevents context drift and term deformation by translating natural paragraphs in parallel.
-- 🔌 **Pluggable Backends**: Out-of-the-box adapters for DeepSeek (V3/R1), OpenAI (GPT-4o-mini), and local Ollama.
+- 🔌 **Pluggable Backends**: Out-of-the-box adapters for DeepSeek (V3/R1), CPA (Local Proxy/Gemini), OpenAI (GPT-4o-mini), and local Ollama.
+- 📚 **Standardized Three-PDF Archive**: Systematically organizes `original.pdf`, `chinese_mono.pdf`, `bilingual_dual.pdf` alongside index READMEs.
 - 🤖 **Hermes Agent Ready**: Includes native `SKILL.md` for AI agent workflows.
 
 ---
@@ -49,7 +53,13 @@ pip install pdf2zh-next  # Optional, for direct PDF processing
 
 ### Usage Examples
 
-#### 1. One-click arXiv Paper Translation (Recommended)
+#### 0. Auto Pipeline (Recommended)
+Pass an arXiv ID, paper title, or local PDF directly:
+```bash
+python scripts/zotero_translate.py --input "2201.02609" --provider deepseek --output-dir "./output"
+```
+
+#### 1. One-click arXiv Paper Translation
 ```bash
 python scripts/zotero_translate.py --arxiv "2201.02609" --provider deepseek --output-zip "GCD_paper_zh.zip"
 ```

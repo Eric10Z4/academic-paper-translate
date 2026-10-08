@@ -28,10 +28,14 @@
 ## ✨ 核心特性
 
 - 🎯 **零解析、零解读、零总结**：严格 1:1 逐句精准翻译，绝不掺杂任何对话式解释或大纲。
-- 📐 **100% 格式与公式保留**：所有数学符号、表格结构、矢量图与文献引用（`\cite`、`\ref`）完好无损。
+- 📐 **100% 格式与公式保留**：所有数学符号、表格结构、矢量图与文献引用（`\cite`、`
+ef`）完好无损。
+- 📊 **表格与实验数据 100% 冻结（最高准则）**：表格环境（`tabular`、`table`、`table*`）内的数值、模型名与对比数据绝对冻结，大模型仅翻译 `\caption` 表题。
+- 🔍 **全自动 arXiv 识别与源码下载管线**：支持传入 arXiv ID、论文英文标题、本地 PDF，自动匹配检索并拉取源码解压精翻；找不到自动降级至 PDF 版面模式。
 - 📝 **内置 Zotero 官方插件原版提示词**：直接复用科研界最认可的学术 Prompt，专有名词（如“广义类别发现”、“对比表征学习”、“半监督 $k$-means”）精准规范。
 - ⚡ **逐段独立并发请求（Paragraph-by-Paragraph）**：将全文拆分为自然段落并发请求，避免长文本导致的上下文漂移与术语变形。
-- 🔌 **多后端适配器支持**：内置开箱即用的 DeepSeek（V3 / R1）、OpenAI（GPT-4o-mini 等）以及本地 Ollama 离线适配器。
+- 🔌 **多后端适配器支持**：内置开箱即用的 DeepSeek（V3 / R1）、CPA (本地反代/Gemini)、OpenAI（GPT-4o-mini 等）以及本地 Ollama 离线适配器。
+- 📚 **标准化论文集三 PDF 归档体系**：规范化管理 `original.pdf`、`chinese_mono.pdf`、`bilingual_dual.pdf` 及全景 README 导读清单。
 - 🤖 **Hermes Agent 技能即插即用**：提供标准 `SKILL.md`，可直接作为 AI Agent 的 procedural skill 使用。
 
 ---
@@ -54,6 +58,7 @@ academic-paper-translate/
 ├── adapters/                         # 模型适配器
 │   ├── base.py                       # 基础适配器抽象类
 │   ├── deepseek_adapter.py           # DeepSeek 官方适配器
+│   ├── cpa_adapter.py                # 本地 CPA / Cherry Studio 适配器
 │   ├── openai_adapter.py             # 标准 OpenAI 兼容适配器
 │   └── ollama_adapter.py             # 本地 Ollama 离线适配器
 ├── scripts/                          # 核心执行脚本
@@ -98,7 +103,14 @@ export DEEPSEEK_API_KEY="your-api-key"
 
 ## 📖 使用示例
 
-### 场景 1：arXiv 论文一键逐段精翻（最推荐，100% 顶会原排版）
+### 场景 0：全自动主工作流（强烈推荐，智能识别源与降级兜底）
+无论是 arXiv 编号、论文英文标题、本地 PDF 还是 TeX 源码目录，直接使用 `--input` 传入：
+```bash
+python scripts/zotero_translate.py --input "2201.02609" --provider deepseek --output-dir "./output"
+```
+- 自动流程：优先检索下载 arXiv 源码并精翻（表格绝对冻结仅翻 caption）；未发现 LaTeX 源码时自动平滑降级至本地 PDF 版面翻译模式。
+
+### 场景 1：arXiv 论文一键逐段精翻（100% 顶会原排版）
 只需输入 arXiv 编号，脚本会自动下载官方源码、逐段调用学术 Prompt 精翻、注入中文宏包并打包为 ZIP：
 ```bash
 python scripts/zotero_translate.py --arxiv "2201.02609" --provider deepseek --output-zip "GCD_paper_zh.zip"

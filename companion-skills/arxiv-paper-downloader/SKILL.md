@@ -29,7 +29,7 @@ rm "<目标目录>/source.tar.gz"
 ### 3. 一键联动翻译
 下载完成后，可直接调用 `academic-paper-translate`：
 ```bash
-python C:/Users/26730/AppData/Local/hermes/skills/academic-paper-translate/scripts/zotero_translate.py \
+python scripts/zotero_translate.py \
   --dir "<目标目录>" \
   --output-zip "<保存路径>/<arxiv_id>_zh.zip"
 ```
