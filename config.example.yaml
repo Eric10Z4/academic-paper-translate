@@ -1,6 +1,6 @@
 # Academic Paper Translate Configuration
 
-# Default translation provider: deepseek | openai | ollama
+# Default translation provider: deepseek | cpa | openai | ollama
 provider: "deepseek"
 
 # Provider Settings
@@ -10,6 +10,13 @@ providers:
     base_url: "https://api.deepseek.com/v1"
     api_key: "your-deepseek-api-key"
     model: "deepseek-chat"
+    timeout: 60
+
+  # Local CPA (Cherry Studio / Antigravity proxy)
+  cpa:
+    base_url: "http://127.0.0.1:8317/v1"
+    api_key: "your-cpa-api-key"
+    model: "gemini-3.8-flash-high"
     timeout: 60
 
   # Standard OpenAI-Compatible Endpoint
