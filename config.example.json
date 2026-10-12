@@ -1,0 +1,14 @@
+{
+  "providers": {
+    "cpa": {
+      "base_url": "http://127.0.0.1:8317/v1",
+      "model": "gemini-3.8-flash-high",
+      "timeout": 90,
+      "attempts": 3
+    }
+  },
+  "fallback": {
+    "timeout": 1200,
+    "no_proxy": "127.0.0.1,localhost"
+  }
+}

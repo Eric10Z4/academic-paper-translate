@@ -1,107 +1,56 @@
 ---
 name: academic-paper-translate
-description: Use when translating papers to Chinese with layout.
+description: Translate English academic papers into Simplified Chinese, preferring original LaTeX sources and checked local PDF compilation. Use for arXiv IDs, paper titles, local PDFs, and TeX projects; preserve tables, formulas and references and deliver verified PDFs and source archives.
 ---
 
-# Academic Paper Translate (学术论文原格式精准翻译)
+# 学术论文原格式翻译
 
-专门针对学术论文（arXiv / LaTeX 源码 / PDF）进行全篇完整、精准、保留原始学术排版与数学公式的高质量翻译。
+使用本技能完成全文翻译，不输出论文摘要、导读、核心创新点或自行增加的评述。表格正文、方法名、数值、公式、引用键和代码必须由程序保护；表格内仅翻译 caption。不要绕过校验手动把整份 TeX 交给模型。
 
-## 核心守则（极其重要）
-- 零解析、零解读、零总结：绝不生成大纲、背景介绍、要点提炼或长文评述。用户只要求纯翻译。
-- 100% 格式保留：保留双栏排版、页码、图表位置，所有 LaTeX 数学公式和特殊符号原封不动。
-- 表格与数据绝对冻结（最高准则）：表格环境（tabular/table）内的所有实验数据、对比数值、方法名、指标列一律 100% 原样保留，绝不允许大模型触碰与篡改，仅翻译 \caption 表题！
-- 优先寻找 LaTeX 源码工程包（强制优先级）：凡是论文翻译任务，第一优先级必须自动在全网（arXiv 等）寻找下载 LaTeX 源码包；只有在实在检索不到可用源码时，才允许降级采用纯 PDF 版面翻译模式。
-- 统一使用 Zotero 插件原版学术提示词。
+## Hermes 执行入口
 
----
+Windows 下使用 Hermes 实际安装环境，不能使用路径中碰巧名为 python 的其他解释器。首选运行技能自带的入口：
 
-## 1. Zotero 官方插件原版提示词（Prompt Template）
-直接复用 Zotero PDF Translate 插件中生效的 Prompt：
-
-```text
-As an academic expert with specialized knowledge in various fields, please provide a proficient and precise translation from English to Simplified Chinese of the academic text enclosed in 🔤. It is crucial to maintaining the original phrase or sentence and ensure accuracy while utilizing the appropriate language. Keep all LaTeX markup, math notation ($...$, equations), citations (\cite{...}), references (\ref{...}), and environment tags intact. Translate only the natural language text. The text is as follows:
-
-🔤 {source_text} 🔤
-
-Please provide the translated result without any additional explanation and remove 🔤.
+```powershell
+& "$env:LOCALAPPDATA\hermes\skills\academic-paper-translate\scripts\run.ps1" --doctor
+& "$env:LOCALAPPDATA\hermes\skills\academic-paper-translate\scripts\run.ps1" --input "论文标题、arXiv编号、PDF绝对路径或TeX目录" --output-dir "新的独立输出目录" --workers 4
 ```
 
----
+`run.ps1` 固定使用 Hermes 的 `hermes-agent\venv\Scripts\python.exe`。依赖缺失时，使用同一个解释器安装根目录 `requirements.txt`；不要悄悄改用系统 Python。其他系统可直接用已安装依赖的 Python 执行 `scripts/zotero_translate.py`。
 
-## 2. 模型与网络环境配置
-- 多后端支持：支持 CPA (本地反代/Gemini)、DeepSeek (官方API)、OpenAI 兼容端点、本地 Ollama 离线模型。
-- 本地反代/CPA 典型配置：
-  - API Endpoint: http://127.0.0.1:8317/v1
-  - Model: gemini-3.8-flash-high (或 deepseek-chat)
-  - API Key: 通过环境变量（如 CPA_API_KEY / DEEPSEEK_API_KEY）或命令行参数传入
-- 避坑环境设置：如本地存在代理转发，建议设置 `NO_PROXY=127.0.0.1,localhost`，绕过系统代理或本地端口回环导致的 502。
+完整论文可能超过 Hermes 终端默认前台时限。请用终端工具的 `background=true, notify=true` 启动，再用 process 工具等待结束并读取日志；不要反复重启同一个输出目录，也不要让前台超时杀掉编译或翻译进程。若上次进程被外部终止，先核对 `.translation/active.lock` 中的 PID；仅确认该进程已经退出后，才清理这份锁文件重试，保留原有日志与缓存。
 
----
+默认后端为现有 CPA 和 `gemini-3.8-flash-high`。凭证从 `config.local.json` 或 `CPA_API_KEY` 读取；不要在回复、日志、命令参数或分享的 ZIP 中展示。环境变量优先于本地配置。其他后端通过 `--provider deepseek` 或 `--provider ollama` 选择。
 
-## 3. 标准化执行工作流（优先级管线）
+## 输入与执行
 
-### 第一优先级（方案 1）：自动检索 LaTeX 源码工程一键精翻（出版级排版，表格 100% 冻结无损）
-无论提供的是论文标题、arXiv 链接还是本地英文 PDF，脚本均会自动提取 arXiv 编号或向 arXiv API 发起标题检索，自动下载官方 e-print 源码包解压精翻。
+- 优先从用户给定 TeX 工程或 arXiv 获取源码。标题仅在高置信匹配时采用；无法确定时说明需要论文编号或原 PDF，不把其他论文冒充目标论文。
+- 本地 PDF 路径优先按文件识别，即使文件名包含 arXiv 编号。若无可用源码，自动采用 PDF 降级流程。
+- 原工程只读，翻译和编译均在输出目录的 `.translation` 工作副本中进行。不要把输出目录设置成原工程根目录。
+- 多主文件工程用 `--main 相对路径`。如有官方英文 PDF，使用 `--original 绝对路径`。仅有源码时会编译原英文工程作为对照，并在记录中标注来源，不能称其为另行取得的官方 PDF。
+- 模型请求只包含可编辑自然语言和不透明占位符；表格数据、公式、数值和原始引用键不会被发送。占位符有缺失、重复、变化或顺序破坏时重试，仍失败则停止原生分支并留档。
+- 遇到动态输入路径、未知宏、环境不平衡、非 UTF-8 源码等无法可靠处理的结构，程序明确失败并尝试降级。自定义无参宏仅在定义能证明为纯文字时放行；可能隐藏表格或数学边界的宏不得当成普通标记。不要声称任意 TeX 宏都已自动支持。
+- 默认采用 Zotero 学术提示词。`--prompt cs_ai_specialized` 或 `--prompt math_formula_preservation` 可选择专门提示词；不要自加解读要求。
 
-#### 执行命令（全自动入口）：
-```bash
-NO_PROXY=127.0.0.1,localhost python scripts/zotero_translate.py \
-  --input "<arXiv编号 / 论文完整英文标题 / 本地PDF路径 / 本地TeX源码目录>" \
-  --provider deepseek \
-  --output-dir "<输出目录>" \
-  --workers 4
-```
+## 检查与交付
 
-- 表格处理逻辑：脚本自动识别所有 table、table*、tabular、tabularx、longtable 环境，内部所有数值、对齐符号、宏命令全部原封不动冻结，仅提取其中的 \caption{...} 进行中文翻译；
-- 公式与代码保护：自动识别 equation、align、gather、algorithm、lstlisting 等环境，绝不送往大模型；
-- 中文宏包注入：主文档自动检测并注入 \usepackage[UTF8]{ctex}，并打包生成 Overleaf 标准工程 ZIP 包。
+命令结束后必须读取输出目录中的 `translation_manifest.json`，根据其状态报告结果：
 
----
+| 状态 | 应如何交付 |
+| --- | --- |
+| `complete_native` | 交付 original.pdf、chinese_mono.pdf、bilingual_dual.pdf、chinese_source.zip；说明清单中实有的页数变化或来源说明 |
+| `complete_fallback` | 交付三 PDF；有源码时另附 chinese_source_uncompiled.zip；明确说明采用 PDF 降级，冻结区的 TeX 级保证不适用 |
+| `review_required` | 文件已产生，但存在排版警告；说明需检查的位置，不宣称全部验收通过 |
+| `failed` | 报告失败阶段与日志路径；保留源码和缓存，不把之前留下的 PDF 当成本次成功产物 |
 
-### 第二优先级（方案 2）：纯本地 PDF 自动保排版翻译（降级兜底方案）
-只有在全网检索确认没有公开 LaTeX 源码包（如非 arXiv 封闭会议/期刊扫描件）时，才允许降级使用该模式。
+原生完成必须通过正文片段完整性校验、干净目录编译、引用收敛、PDF 可读性检查、双语页数检查和源码 ZIP 解压重编译。英文和中文页数不同会保留全部页，缺失侧注明；按页码并排不等同于语义段落完全对齐。翻译后的文字长度会改变换行、浮动位置或分页，不承诺与英文逐像素一致。
 
-```bash
-NO_PROXY=127.0.0.1,localhost uv tool run --from pdf2zh-next pdf2zh_next \
-  "<本地PDF路径>" \
-  --openaicompatible \
-  --openai-compatible-base-url "http://127.0.0.1:8317/v1" \
-  --openai-compatible-api-key "your-api-key" \
-  --openai-compatible-model "gemini-3.8-flash-high" \
-  --no-auto-extract-glossary \
-  --figure-table-protection-threshold 0.1 \
-  --qps 5 \
-  --lang-in en --lang-out zh-CN \
-  --custom-system-prompt "As an academic expert with specialized knowledge in various fields, please provide a proficient and precise translation from English to Simplified Chinese of the academic text. It is crucial to maintaining the original phrase or sentence and ensure accuracy while utilizing the appropriate language. Please provide the translated result without any additional explanation." \
-  --output "<输出目录>"
-```
+PDF 降级固定使用 pdf2zh-next 2.9.0，关闭表格文字翻译并启用图表保护；OCR 布局识别无法提供源码字节级证明。原文本就没有 TeX 时，不伪造源码 ZIP。
 
-- 显式配置 `--figure-table-protection-threshold 0.1`，最大限度降低表格区域被误切送译的概率；
-- 默认生成 `_mono.pdf`（纯中文单语）与 `_dual.pdf`（中英双语对照）。
+部分旧模板的 Times/Helvetica/Courier 字体声明与 XeLaTeX 的 TU 编码不兼容。只有日志实际报告相关字体族缺失时，编译器才在工作副本中改用对应的 Unicode 字体（Windows 上为 Times New Roman、Arial、Courier New），记录兼容重试并把设置留在可重编译源码包中。它不保证字体与发行版逐字形一致；残留字体替换警告与 Overfull 警告都标为 `review_required`。宏包缺失时查阅编译日志，用 MiKTeX 安装明确缺失的依赖后再重试；不要忽略报错或换一个旧 PDF。
 
----
+不更新论文集“创新点”导读，也不重新翻译原工程。可以复用 `.translation/cache.json` 中已验证片段；不同论文必须使用不同输出目录。
 
-## 4. 论文集标准化归档规范（三 PDF 体系）
+## 维护与测试
 
-在建立或扩充论文集目录（如 openworld CV、agent、经典 等）时，统一遵循以下标准化归档流程：
-
-### 1. 目录结构规范
-每个主题论文集为一个大文件夹，根目录下维护 README.md 导读清单；每篇论文单独建一个编号子文件夹：
-
-```text
-<论文集根目录>/
-├── README.md                                          # 论文集全景路线图与导读索引
-└── [两位序号]_[论文核心名称]_[会议年份或arXiv]/
-    ├── original.pdf       # 官方原版英文论文 PDF
-    ├── chinese_mono.pdf   # 100% 保留双栏排版、高清图表与数学公式的纯中文版 PDF
-    └── bilingual_dual.pdf # 左右 1:1 镜像并列的中英双语对照版 PDF
-```
-
-### 2. 标准文件命名要求（严格一致）
-- original.pdf：官方原版英文论文；
-- chinese_mono.pdf：纯中文单语论文（双栏排版、公式代码、表格完全对齐）；
-- bilingual_dual.pdf：中英双语左右对照版 PDF。
-
-### 3. README.md 索引维护规范
-归档后同步在根目录的 README.md 中更新论文导读项，包含完整标题、作者与机构、发表平台/年份、子文件夹路径、以及核心创新点。
+修改后用 Hermes 的 Python 运行 `tests/test_regression.py`。真实翻译验收通过 Hermes 加载本技能并执行 `tests/run_acceptance.py --workspace 独立测试目录`；该测试会实际调用现有 CPA，覆盖多文件表格、公式、引用、仅有 bbl、纯 PDF 降级和编译失败降级。测试前读 [AUDIT_SPEC.md](AUDIT_SPEC.md)，验收日志不能用模型口头声明替代。

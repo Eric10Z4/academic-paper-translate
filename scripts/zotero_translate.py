@@ -1,483 +1,359 @@
-import os
-import sys
-import re
-import json
-import urllib.request
-import urllib.parse
-import xml.etree.ElementTree as ET
-import zipfile
-import tarfile
+"""Hermes academic translation entry point. No success without verified artifacts."""
+from __future__ import annotations
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+import difflib
+import gzip
+import hashlib
+import io
+import json
+import os
+import re
+import shutil
+import sys
+import tarfile
+import time
+import urllib.parse
+import urllib.request
+import uuid
+import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor,as_completed
+from pathlib import Path
 
-try:
-    import fitz  # PyMuPDF
-except ImportError:
-    fitz = None
+ROOT=Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
+from adapters import CPAAdapter,DeepSeekAdapter,OllamaAdapter
+from scripts.latex_syntax import ProjectPlan,IntegrityError,mask_latex_tokens,unmask_latex_tokens
+from scripts.latex_compiler import compile_latex_project,find_main_tex,make_side_by_side_dual_pdf,pack_source_zip
+from scripts.project_utils import atomic_json,copy_project,pdf_info,project_files,safe_extract_tar,sha256
 
-try:
-    from adapters.deepseek_adapter import DeepSeekAdapter
-    from adapters.openai_adapter import OpenAIAdapter
-    from adapters.ollama_adapter import OllamaAdapter
-    from adapters.cpa_adapter import CPAAdapter
-except ImportError:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from adapters.deepseek_adapter import DeepSeekAdapter
-    from adapters.openai_adapter import OpenAIAdapter
-    from adapters.ollama_adapter import OllamaAdapter
-    from adapters.cpa_adapter import CPAAdapter
+DEFAULT_PROMPT_TEMPLATE=(ROOT/'prompts/zotero_default.txt').read_text(encoding='utf-8')
+ARXIV_RE=re.compile(r'(?<![\w])((?:\d{4}\.\d{4,5}|[a-z][a-z.-]*/\d{7})(?:v\d+)?)(?![\w])',re.I)
 
-DEFAULT_PROMPT_TEMPLATE = """As an academic expert with specialized knowledge in various fields, please provide a proficient and precise translation from English to Simplified Chinese of the academic text enclosed in 🔤. It is crucial to maintaining the original phrase or sentence and ensure accuracy while utilizing the appropriate language. Keep all LaTeX markup, math notation ($...$, equations), citations (\\cite{...}), references (\\ref{...}), and environment tags intact. Translate only the natural language text. The text is as follows:
 
-🔤 __SOURCE_TEXT__ 🔤
+def load_config(path=None):
+    path=Path(path or os.getenv('ACADEMIC_TRANSLATE_CONFIG',str(ROOT/'config.local.json')))
+    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
 
-Please provide the translated result without any additional explanation and remove 🔤."""
 
-def load_config(config_path="config.yaml"):
-    if os.path.exists(config_path):
-        try:
-            import yaml
-            with open(config_path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
-        except Exception as e:
-            print(f"[config] Notice: could not load config file {config_path}: {e}")
-    return {}
+def get_adapter(provider='cpa',config=None):
+    config=load_config() if config is None else config
+    cls={'cpa':CPAAdapter,'deepseek':DeepSeekAdapter,'ollama':OllamaAdapter}[provider]
+    options={k:v for k,v in config.get('providers',{}).get(provider,{}).items() if k in {'base_url','api_key','model','timeout','attempts'} and v is not None}
+    prefix=provider.upper()
+    for key in ['api_key','base_url','model']:
+        if os.getenv(prefix+'_'+key.upper()) is not None:options[key]=os.environ[prefix+'_'+key.upper()]
+    return cls(**options)
 
-def get_adapter(provider="deepseek", config=None, api_key=None, base_url=None, model=None):
-    if config and "providers" in config and provider in config["providers"]:
-        cfg = config["providers"][provider]
-        b_url = base_url or cfg.get("base_url")
-        key = api_key or cfg.get("api_key")
-        mod = model or cfg.get("model")
-        if provider == "deepseek":
-            return DeepSeekAdapter(base_url=b_url, api_key=key, model=mod)
-        elif provider == "openai":
-            return OpenAIAdapter(base_url=b_url, api_key=key, model=mod)
-        elif provider == "ollama":
-            return OllamaAdapter(base_url=b_url, api_key=key, model=mod)
-        elif provider == "cpa":
-            return CPAAdapter(base_url=b_url, api_key=key, model=mod)
 
-    # Defaults from CLI args or environment variables
-    if provider == "deepseek":
-        b_url = base_url or os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-        key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
-        mod = model or "deepseek-chat"
-        return DeepSeekAdapter(base_url=b_url, api_key=key, model=mod)
-    elif provider == "cpa":
-        b_url = base_url or os.environ.get("CPA_BASE_URL", "http://127.0.0.1:8317/v1")
-        key = api_key or os.environ.get("CPA_API_KEY", "")
-        mod = model or "gemini-3.8-flash-high"
-        return CPAAdapter(base_url=b_url, api_key=key, model=mod)
-    elif provider == "ollama":
-        b_url = base_url or os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434/v1")
-        mod = model or "qwen2.5:14b"
-        return OllamaAdapter(base_url=b_url, api_key="ollama", model=mod)
-    else:  # openai
-        b_url = base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        key = api_key or os.environ.get("OPENAI_API_KEY", "")
-        mod = model or "gpt-4o-mini"
-        return OpenAIAdapter(base_url=b_url, api_key=key, model=mod)
+def _download(url,target,limit=200*1024*1024):
+    target=Path(target);target.parent.mkdir(parents=True,exist_ok=True)
+    req=urllib.request.Request(url,headers={'User-Agent':'academic-paper-translate/2.0 (research source retrieval)'})
+    temp=target.with_name(target.name+'.download')
+    try:
+        with urllib.request.urlopen(req,timeout=45) as response,open(temp,'wb') as f:
+            total=0
+            while True:
+                chunk=response.read(1024*1024)
+                if not chunk:break
+                total+=len(chunk)
+                if total>limit:raise ValueError('Download exceeds size limit')
+                f.write(chunk)
+        os.replace(temp,target)
+    finally:
+        if temp.exists():temp.unlink()
 
-# ----------------------------------------------------------------------
-# 1. 自动寻找 arXiv 编号与下载 LaTeX 源码包
-# ----------------------------------------------------------------------
 
 def find_arxiv_id_from_pdf(pdf_path):
-    """从本地 PDF 前 3 页文本中正则匹配 arXiv 编号"""
-    if not fitz or not os.path.exists(pdf_path):
-        return None
-    try:
-        doc = fitz.open(pdf_path)
-        text = ""
-        for i in range(min(3, len(doc))):
-            text += doc[i].get_text() + "\n"
-        m = re.search(r'arxiv[:\.\s/]+([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?)', text, re.IGNORECASE)
-        if m:
-            return m.group(1)
-        m2 = re.search(r'arxiv\.org/abs/([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?)', text, re.IGNORECASE)
-        if m2:
-            return m2.group(1)
-    except Exception as e:
-        print(f"[find_arxiv_id_from_pdf] Error reading PDF: {e}")
-    return None
+    import pymupdf
+    with pymupdf.open(str(pdf_path)) as doc:
+        text='\n'.join(doc[i].get_text() for i in range(min(3,len(doc))))
+    match=re.search(r'arxiv(?:\s*:\s*|\.org/(?:abs|pdf)/)'+ARXIV_RE.pattern,text,re.I)
+    return match.group(1) if match else None
+
 
 def search_arxiv_by_title(title):
-    """通过 arXiv API 根据论文标题搜索匹配的 arXiv ID"""
-    if not title or len(title.strip()) < 5:
-        return None
-    clean_title = re.sub(r'[\r\n\t]+', ' ', title).strip()
-    clean_title = re.sub(r'[^a-zA-Z0-9\s]', ' ', clean_title)
-    query_title = " ".join(clean_title.split()[:12])
-    try:
-        query = urllib.parse.quote(f'ti:"{query_title}"')
-        url = f"http://export.arxiv.org/api/query?search_query={query}&max_results=1"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            xml_data = r.read().decode('utf-8')
-        root = ET.fromstring(xml_data)
-        ns = {'atom': 'http://www.w3.org/2005/Atom'}
-        entry = root.find('atom:entry', ns)
-        if entry is not None:
-            id_elem = entry.find('atom:id', ns)
-            if id_elem is not None and id_elem.text:
-                m = re.search(r'([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?)', id_elem.text)
-                if m:
-                    return m.group(1)
-    except Exception as e:
-        print(f"[search_arxiv_by_title] API query failed: {e}")
-    return None
+    normalized=lambda s:re.sub(r'[^a-z0-9]+',' ',s.lower()).strip()
+    clean=normalized(title)
+    if len(clean)<5:return None
+    query=urllib.parse.urlencode({'search_query':'ti:"'+' '.join(clean.split()[:16])+'"','max_results':5})
+    req=urllib.request.Request('https://export.arxiv.org/api/query?'+query,headers={'User-Agent':'academic-paper-translate/2.0'})
+    with urllib.request.urlopen(req,timeout=30) as response:root=ET.fromstring(response.read())
+    ns={'a':'http://www.w3.org/2005/Atom'};matches=[]
+    for entry in root.findall('a:entry',ns):
+        found=entry.findtext('a:title','',ns);identifier=entry.findtext('a:id','',ns)
+        m=ARXIV_RE.search(identifier)
+        score=difflib.SequenceMatcher(None,clean,normalized(found)).ratio()
+        if m and score>=0.90:matches.append((score,m.group(1)))
+    matches.sort(reverse=True)
+    if len(matches)>1 and matches[0][0]-matches[1][0]<0.03:raise ValueError('Ambiguous title match; supply arXiv ID')
+    return matches[0][1] if matches else None
 
-def fetch_arxiv_source(arxiv_id, target_dir):
-    """从 arXiv 下载 e-print 源码包并解压"""
-    clean_id = arxiv_id.lower().replace('arxiv:', '').strip()
-    os.makedirs(target_dir, exist_ok=True)
-    tar_path = os.path.join(target_dir, f"{clean_id}.tar.gz")
-    url = f"https://arxiv.org/e-print/{clean_id}"
-    print(f"[fetch_arxiv_source] Downloading arXiv source from {url}...")
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    }
-    req = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp, open(tar_path, 'wb') as out_f:
-            out_f.write(resp.read())
-    except Exception as e:
-        print(f"[fetch_arxiv_source] Failed to download arXiv source: {e}")
-        return False
 
-    print("[fetch_arxiv_source] Extracting source package...")
+def download_arxiv_pdf(arxiv_id,target_pdf_path):
     try:
-        with tarfile.open(tar_path, "r:*") as tar:
-            tar.extractall(path=target_dir)
-        os.remove(tar_path)
-    except Exception:
+        _download('https://arxiv.org/pdf/'+arxiv_id,target_pdf_path)
+        pdf_info(target_pdf_path);return True
+    except Exception as e:
+        print('Original PDF unavailable:',type(e).__name__);return False
+
+
+def fetch_arxiv_source(arxiv_id,target_dir):
+    target=Path(target_dir);target.mkdir(parents=True,exist_ok=True)
+    archive=target.parent/(target.name+'.download.gz')
+    try:
+        _download('https://arxiv.org/e-print/'+arxiv_id,archive)
+        header=archive.read_bytes()[:8]
+        if header.startswith(b'%PDF'):return False
+        if tarfile.is_tarfile(archive):safe_extract_tar(archive,target)
+        else:
+            if header.startswith(b'\x1f\x8b'):
+                with gzip.open(archive,'rb') as f:data=f.read(64*1024*1024+1)
+            else:data=archive.read_bytes()
+            if len(data)>64*1024*1024 or data.startswith(b'%PDF'):return False
+            text=data.decode('utf-8')
+            if '\\documentclass' not in text:return False
+            (target/'main.tex').write_bytes(data)
+        return bool(find_main_tex(target))
+    except Exception as e:
+        print('Source unavailable:',type(e).__name__,str(e)[:200]);return False
+    finally:
+        if archive.exists():archive.unlink()
+
+
+def process_latex_project(project_dir,adapter=None,prompt_template=None,max_workers=4,main_tex=None,cache_path=None):
+    if not 1<=max_workers<=16:raise ValueError('workers must be between 1 and 16')
+    adapter=adapter or get_adapter();prompt_template=prompt_template or DEFAULT_PROMPT_TEMPLATE
+    root=Path(project_dir).resolve();main=Path(main_tex or find_main_tex(root))
+    plan=ProjectPlan(root,main)
+    if not plan.segments:raise IntegrityError('No translatable English prose was found')
+    namespace=hashlib.sha256((getattr(adapter,'base_url','')+getattr(adapter,'model','test')+prompt_template).encode()).hexdigest()
+    cache={}
+    if cache_path and Path(cache_path).exists():
+        try:cache=json.loads(Path(cache_path).read_text(encoding='utf-8'))
+        except (ValueError,OSError):pass
+    answers={};cached=0
+    unique={s.key:s for s in plan.segments}
+    todo=[]
+    for key,s in unique.items():
+        ck=namespace+':'+key
         try:
-            import gzip
-            with gzip.open(tar_path, 'rb') as gz_in:
-                content = gz_in.read()
-            with open(os.path.join(target_dir, "main.tex"), "wb") as f_out:
-                f_out.write(content)
-            os.remove(tar_path)
-        except Exception as e2:
-            print(f"[fetch_arxiv_source] Failed to extract source archive: {e2}")
-            return False
+            s.restore(cache[ck]);answers[key]=cache[ck];cached+=1
+        except (KeyError,ValueError):todo.append(s)
 
-    has_tex = False
-    for root, _, files in os.walk(target_dir):
-        if any(f.endswith(".tex") for f in files):
-            has_tex = True
-            break
-    if has_tex:
-        print(f"[fetch_arxiv_source] Successfully extracted LaTeX source to {target_dir}")
-        return True
-    else:
-        print(f"[fetch_arxiv_source] No .tex files found in extracted archive.")
-        return False
-
-# ----------------------------------------------------------------------
-# 2. LaTeX 宏与花括号平衡匹配提取
-# ----------------------------------------------------------------------
-
-def find_command_positions(text, cmd=r'\caption'):
-    """基于花括号平衡算法，精准定位并提取类似 \\caption{...} 的参数范围"""
-    results = []
-    idx = 0
-    while True:
-        pos = text.find(cmd, idx)
-        if pos == -1:
-            break
-        brace_pos = text.find('{', pos + len(cmd))
-        if brace_pos == -1 or brace_pos > pos + len(cmd) + 10:
-            idx = pos + len(cmd)
-            continue
-        depth = 1
-        curr = brace_pos + 1
-        while curr < len(text) and depth > 0:
-            if text[curr] == '{':
-                depth += 1
-            elif text[curr] == '}':
-                depth -= 1
-            curr += 1
-        if depth == 0:
-            results.append((pos, brace_pos, curr))
-            idx = curr
-        else:
-            idx = pos + len(cmd)
-    return results
-
-# ----------------------------------------------------------------------
-# 3. 核心：表格/公式完全冻结与段落翻译
-# ----------------------------------------------------------------------
-
-TABLE_ENVS = [
-    'tabular', 'tabular*', 'tabularx', 'tabulary', 'longtable', 'supertabular'
-]
-MATH_ENVS = [
-    'equation', 'equation*', 'align', 'align*', 'gather', 'gather*',
-    'multline', 'multline*', 'eqnarray', 'eqnarray*'
-]
-CODE_ENVS = [
-    'verbatim', 'lstlisting', 'minted', 'algorithmic', 'algorithm2e'
-]
-
-def split_into_paragraphs(tex_content):
-    return re.split(r'(\n\s*\n+)', tex_content)
-
-def translate_caption_inside_block(block, adapter, prompt_template):
-    """针对 table / figure 容器环境：数据与排版 100% 冻结，仅翻译 \\caption{...}"""
-    positions = find_command_positions(block, r'\caption')
-    if not positions:
-        return block
-
-    new_block = block
-    for pos, brace_start, end_pos in reversed(positions):
-        original_caption = block[brace_start + 1:end_pos - 1]
-        if re.search(r'[a-zA-Z]{3,}', original_caption):
+    def worker(segment):
+        error=None
+        for attempt in range(2):
             try:
-                translated_caption = adapter.translate(original_caption, prompt_template)
-                new_block = new_block[:brace_start + 1] + translated_caption + new_block[end_pos - 1:]
-            except Exception as e:
-                print(f"[translate_caption] Error translating caption: {e}")
-    return new_block
+                answer=adapter.translate(segment.masked,prompt_template)
+                segment.restore(answer)
+                return segment.key,answer
+            except (IntegrityError,ValueError) as e:error=e
+        raise IntegrityError(f'Translation validation failed at {segment.path.name}:{segment.start}: {error}')
 
-def translate_tex_file(file_path, output_path=None, adapter=None, prompt_template=None, max_workers=4):
-    if output_path is None:
-        output_path = file_path
-    if adapter is None:
-        adapter = get_adapter("deepseek")
-    if prompt_template is None:
-        prompt_template = DEFAULT_PROMPT_TEMPLATE
+    executor=ThreadPoolExecutor(max_workers=max_workers)
+    futures=[executor.submit(worker,s) for s in todo]
+    try:
+        for future in as_completed(futures):
+            key,answer=future.result();answers[key]=answer;cache[namespace+':'+key]=answer
+            if cache_path:atomic_json(cache_path,cache)
+    except BaseException:
+        # Stop queued API calls on the first terminal failure. At most the
+        # already-running, individually time-bounded requests must finish.
+        for future in futures:future.cancel()
+        raise
+    finally:
+        executor.shutdown(wait=True,cancel_futures=True)
+    updated=plan.apply(answers)
+    # Validate ALL replacements before touching even the disposable work copy.
+    sources=[{'file':str(p.relative_to(root)),'before_sha256':hashlib.sha256(t.encode()).hexdigest(),'after_sha256':hashlib.sha256(updated[p].encode()).hexdigest()} for p,t in plan.sources.items()]
+    for p,value in updated.items():p.write_bytes(value.encode('utf-8'))
+    report={'segments':len(plan.segments),'translated':len(plan.segments),'unique_segments':len(unique),'cache_hits':cached,'protected_content_verified':True,'sources':sources,'spans':[{'file':str(s.path.relative_to(root)),'start':s.start,'end':s.end,'kind':s.kind,'protected_tokens':len(s.mapping)} for s in plan.segments]}
+    print(f'Translated and validated {len(plan.segments)} prose spans; frozen syntax restored exactly.')
+    return report
 
-    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-        content = f.read()
 
-    parts = split_into_paragraphs(content)
-    tasks = []
-    caption_tasks = []
+def translate_tex_file(file_path,output_path=None,adapter=None,prompt_template=None,max_workers=4):
+    # Compatibility helper: explicit output is required to protect original data.
+    import tempfile
+    source=Path(file_path).resolve()
+    if output_path is None or Path(output_path).resolve()==source:raise ValueError('Use a different output_path; input is read-only')
+    with tempfile.TemporaryDirectory() as td:
+        copy_project(source.parent,td)
+        target=Path(td)/source.name
+        report=process_latex_project(td,adapter,prompt_template,max_workers,main_tex=target)
+        Path(output_path).parent.mkdir(parents=True,exist_ok=True);shutil.copy2(target,output_path)
+    return report
 
-    for idx, part in enumerate(parts):
-        if idx % 2 == 0:
-            stripped = part.strip()
-            if stripped.startswith('%'):
-                continue
-            if "\\begin{document}" in content:
-                doc_start = content.find("\\begin{document}")
-                part_pos = content.find(part)
-                if part_pos < doc_start and not stripped.startswith("\\title"):
-                    continue
 
-            is_table_block = any(f"\\begin{{{env}}}" in stripped for env in TABLE_ENVS) or \
-                             "\\begin{table}" in stripped or "\\begin{table*}" in stripped
+def _identity(target,original=None,exclude=()):
+    p=Path(target)
+    if p.is_file():return 'file:'+str(p.resolve())+':'+sha256(p)
+    if p.is_dir():
+        excluded=[p/'translated',p/'.translation',*exclude]
+        values=[(str(f.relative_to(p.resolve())),sha256(f)) for f in project_files(p,excluded)]
+        return 'project:'+str(p.resolve())+':'+hashlib.sha256(json.dumps(values).encode()).hexdigest()
+    return 'query:'+target.strip()
 
-            is_math_block = any(f"\\begin{{{env}}}" in stripped for env in MATH_ENVS)
-            is_code_block = any(f"\\begin{{{env}}}" in stripped for env in CODE_ENVS)
-            is_bib_block = "\\begin{thebibliography}" in stripped
 
-            if is_table_block or "\\begin{figure}" in stripped or "\\begin{figure*}" in stripped:
-                if r'\caption' in stripped:
-                    caption_tasks.append((idx, part))
-                continue
-
-            if is_math_block or is_code_block or is_bib_block:
-                continue
-
-            if bool(re.match(r'^\\(begin|end)\{[a-zA-Z0-9_*]+\}$', stripped)) or stripped.startswith('\\usepackage'):
-                continue
-
-            has_letters = bool(re.search(r'[a-zA-Z]{3,}', stripped))
-            if has_letters:
-                tasks.append((idx, part))
-
-    print(f"Translating {os.path.basename(file_path)}: {len(tasks)} prose paragraphs, {len(caption_tasks)} table/figure captions (workers={max_workers})...")
-    results = {}
-
-    if tasks:
-        def worker(item):
-            i, p = item
-            return i, adapter.translate(p, prompt_template)
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for i, res in executor.map(worker, tasks):
-                results[i] = res
-
-    if caption_tasks:
-        for idx, part in caption_tasks:
-            results[idx] = translate_caption_inside_block(part, adapter, prompt_template)
-
-    translated_parts = []
-    for idx, part in enumerate(parts):
-        if idx in results:
-            translated_parts.append(results[idx])
+def _auto_translate_paper(input_target,output_dir=None,provider='cpa',max_workers=4,config=None,original=None,main_tex=None,no_fallback=False,prompt_name='zotero_default',compile_timeout=180):
+    config=load_config() if config is None else config
+    target=Path(input_target).expanduser()
+    final=Path(output_dir or ((target if target.is_dir() else target.parent)/(target.stem+'_translated') if target.exists() else Path.cwd()/('paper_'+hashlib.sha256(input_target.encode()).hexdigest()[:10]))).resolve()
+    if target.is_dir() and final==target.resolve():raise ValueError('Output cannot be the original project directory')
+    final.mkdir(parents=True,exist_ok=True)
+    identity=_identity(input_target,original,exclude=[final])
+    if original:
+        if not Path(original).is_file():raise ValueError('Explicit original PDF does not exist')
+        identity+=':original:'+sha256(original)
+    previous=final/'translation_manifest.json'
+    if previous.exists():
+        if json.loads(previous.read_text(encoding='utf-8')).get('input_identity')!=identity:raise ValueError('Output belongs to different input; choose a new directory')
+    elif any((final/name).exists() for name in ['chinese_mono.pdf','original.pdf','chinese_source.zip','bilingual_dual.pdf']):
+        raise ValueError('Untracked existing artifacts in output; use an empty directory')
+    run=final/'.translation'/'runs'/uuid.uuid4().hex;run.mkdir(parents=True)
+    manifest={'schema_version':2,'skill_version':(ROOT/'VERSION').read_text(encoding='utf-8').strip(),'input_identity':identity,'status':'running','input':str(input_target),'provider':provider,'run_dir':str(run),'errors':[],'warnings':[]}
+    atomic_json(previous,manifest)
+    originals=run/'original.pdf';source=None;arxiv_id=None;translated=None
+    try:
+        import pymupdf
+        if target.is_dir():
+            source=copy_project(target,run/'source',exclude=[final])
+            candidate=Path(original) if original else target/'original.pdf'
+            if candidate.is_file():shutil.copy2(candidate,originals);manifest['original_provenance']='user_supplied_pdf'
+        elif target.is_file() and target.suffix.lower()=='.pdf':
+            shutil.copy2(target,originals);manifest['original_provenance']='user_supplied_pdf'
+            try:
+                arxiv_id=find_arxiv_id_from_pdf(target)
+                if not arxiv_id:
+                    name_match=ARXIV_RE.search(target.stem)
+                    if name_match:
+                        arxiv_id=name_match.group(1)
+                        manifest['warnings'].append('arXiv ID inferred from local filename; supplied PDF retained as original.')
+                if not arxiv_id:
+                    with pymupdf.open(str(target)) as d:title=d.metadata.get('title','')
+                    if title and len(title)>10:arxiv_id=search_arxiv_by_title(title)
+            except Exception as e:manifest['warnings'].append('Source lookup failed: '+type(e).__name__)
+        elif target.exists():raise ValueError('Input must be a PDF or TeX project directory')
         else:
-            translated_parts.append(part)
+            m=ARXIV_RE.search(input_target)
+            arxiv_id=m.group(1) if m else search_arxiv_by_title(input_target)
+            if not arxiv_id:raise ValueError('No confident arXiv match for input')
+        if arxiv_id:
+            manifest['arxiv_id']=arxiv_id
+            if not originals.exists() and download_arxiv_pdf(arxiv_id,originals):manifest['original_provenance']='arxiv_pdf'
+            if fetch_arxiv_source(arxiv_id,run/'source'):source=run/'source'
+        if source and not main_tex and not find_main_tex(source):
+            manifest['errors'].append({'stage':'source','detail':'No usable TeX entry'})
+            pack_source_zip(source,run/'chinese_source_uncompiled.zip')
+            source=None
+        if source:
+            entry=(source/main_tex).resolve() if main_tex else Path(find_main_tex(source) or '')
+            if not entry.is_file():raise ValueError('No valid TeX entry')
+            if not originals.exists():
+                ok,built,log=compile_latex_project(source,entry,timeout=compile_timeout,chinese=False)
+                manifest['original_compile']=json.loads(log) if log.startswith('{') else {'error':log}
+                if ok:
+                    shutil.copy2(built,originals);manifest['original_provenance']='recompiled_untouched_source'
+                    manifest['warnings'].append('Original PDF was rebuilt from source; it is not an independently obtained official PDF.')
+                else:manifest['errors'].append({'stage':'original_compile','detail':log})
+            translated=copy_project(source,run/'translated')
+            entry=translated/entry.relative_to(source)
+            try:
+                prompt=ROOT/'prompts'/(prompt_name+'.txt')
+                if not prompt.resolve().is_relative_to(ROOT/'prompts') or not prompt.exists():raise ValueError('Unknown prompt')
+                adapter=get_adapter(provider,config)
+                manifest['model']=adapter.model
+                manifest['translation']=process_latex_project(translated,adapter,prompt.read_text(encoding='utf-8'),max_workers,entry,final/'.translation'/'cache.json')
+                ok,built,log=compile_latex_project(translated,entry,timeout=compile_timeout)
+                manifest['compile']=json.loads(log) if log.startswith('{') else {'error':log}
+                if not ok:raise RuntimeError('Native compilation did not pass: '+log)
+                if not originals.exists():raise RuntimeError('Original PDF unavailable for bilingual delivery')
+                shutil.copy2(built,run/'chinese_mono.pdf')
+                make_side_by_side_dual_pdf(originals,run/'chinese_mono.pdf',run/'bilingual_dual.pdf')
+                pack_source_zip(translated,run/'chinese_source.zip')
+                # Rebuild the delivered archive, not merely the working tree.
+                import zipfile
+                rebuild=run/'archive_rebuild';rebuild.mkdir()
+                with zipfile.ZipFile(run/'chinese_source.zip') as z:z.extractall(rebuild)
+                ok,_,rebuild_log=compile_latex_project(rebuild,rebuild/entry.relative_to(translated),timeout=compile_timeout)
+                manifest['archive_rebuild']={'success':ok,'details':rebuild_log}
+                if not ok:raise RuntimeError('Archived source cannot be rebuilt')
+                manifest['mode']='latex_native'
+            except Exception as e:
+                manifest['errors'].append({'stage':'native','detail':str(e)[:10000]})
+                pack_source_zip(translated,run/'chinese_source_uncompiled.zip')
+        if manifest.get('mode')!='latex_native':
+            if no_fallback:raise RuntimeError('Native mode failed; fallback disabled')
+            if not originals.exists():raise RuntimeError('No valid original PDF for fallback')
+            from scripts.pdf_runner import run_pdf_translation
+            if not run_pdf_translation(str(originals),str(run),qps=max_workers,config=config,provider=provider):
+                raise RuntimeError('PDF fallback did not produce verified artifacts')
+            manifest['mode']='pdf_fallback'
+            manifest['warnings'].append('PDF fallback does not provide byte-level TeX/table integrity guarantees.')
+        required=['original.pdf','chinese_mono.pdf','bilingual_dual.pdf']
+        info={name:pdf_info(run/name) for name in required}
+        if info['bilingual_dual.pdf']['pages']!=max(info['original.pdf']['pages'],info['chinese_mono.pdf']['pages']):raise ValueError('Dual page count mismatch')
+        if info['original.pdf']['pages']!=info['chinese_mono.pdf']['pages']:manifest['warnings'].append('English and Chinese page counts differ; all pages retained, paired by page index.')
+        with pymupdf.open(str(run/'chinese_mono.pdf')) as d:
+            if not any(re.search(r'[\u3400-\u9fff]',p.get_text()) for p in d):raise ValueError('Chinese PDF has no extractable Chinese text')
+        if manifest['mode']=='latex_native':required.append('chinese_source.zip')
+        elif (run/'chinese_source_uncompiled.zip').exists():required.append('chinese_source_uncompiled.zip')
+        for name in required:shutil.copy2(run/name,final/name)
+        manifest['artifacts']={name:(info[name] if name in info else {'sha256':sha256(final/name),'bytes':(final/name).stat().st_size}) for name in required}
+        warnings=manifest.get('compile',{}).get('layout_warnings',[])
+        manifest['warnings'].extend(warnings)
+        manifest['status']='review_required' if warnings else ('complete_native' if manifest['mode']=='latex_native' else 'complete_fallback')
+        atomic_json(previous,manifest)
+        print('Translation status:',manifest['status'])
+        print('Verified output:',final)
+        return manifest['status'] in {'complete_native','complete_fallback'}
+    except Exception as e:
+        manifest['status']='failed';manifest['errors'].append({'stage':'workflow','detail':str(e)[:10000]})
+        if (run/'chinese_source_uncompiled.zip').exists():shutil.copy2(run/'chinese_source_uncompiled.zip',final/'chinese_source_uncompiled.zip')
+        atomic_json(previous,manifest)
+        print('Translation failed:',str(e)[:1200]);return False
 
-    final_content = "".join(translated_parts)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(final_content)
-    print(f"Finished {os.path.basename(file_path)} (Tables 100% preserved).")
 
-def process_latex_project(project_dir, output_zip=None, adapter=None, prompt_template=None, max_workers=4):
-    for root, dirs, files in os.walk(project_dir):
-        if any(part.startswith('.') for part in root.split(os.sep)):
-            continue
-        for file in files:
-            if file.endswith(".tex") and file not in ["main.tex", "ms.tex", "paper.tex"]:
-                file_path = os.path.join(root, file)
-                translate_tex_file(file_path, file_path, adapter=adapter, prompt_template=prompt_template, max_workers=max_workers)
+def auto_translate_paper(input_target,output_dir=None,provider='cpa',max_workers=4,config=None,original=None,main_tex=None,no_fallback=False,prompt_name='zotero_default',compile_timeout=180):
+    if not 1<=max_workers<=16:raise ValueError('workers must be between 1 and 16')
+    target=Path(input_target).expanduser()
+    final=Path(output_dir or ((target if target.is_dir() else target.parent)/(target.stem+'_translated') if target.exists() else Path.cwd()/('paper_'+hashlib.sha256(input_target.encode()).hexdigest()[:10]))).resolve()
+    if target.is_dir() and final==target.resolve():raise ValueError('Output cannot be the original project directory')
+    lock=final/'.translation'/'active.lock';lock.parent.mkdir(parents=True,exist_ok=True)
+    try:fd=os.open(lock,os.O_CREAT|os.O_EXCL|os.O_WRONLY)
+    except FileExistsError:raise ValueError('Output directory is locked by another run: '+str(lock)) from None
+    try:
+        with os.fdopen(fd,'w') as f:f.write(json.dumps({'pid':os.getpid(),'started':time.time()}))
+        return _auto_translate_paper(input_target,final,provider,max_workers,config,original,main_tex,no_fallback,prompt_name,compile_timeout)
+    finally:
+        if lock.exists():lock.unlink()
 
-    for main_candidate in ["ms.tex", "main.tex", "paper.tex"]:
-        cand_path = os.path.join(project_dir, main_candidate)
-        if os.path.exists(cand_path):
-            translate_tex_file(cand_path, cand_path, adapter=adapter, prompt_template=prompt_template, max_workers=max_workers)
-            with open(cand_path, "r", encoding="utf-8", errors="ignore") as f:
-                c = f.read()
-            if "\\usepackage[UTF8]{ctex}" not in c and "\\usepackage{ctex}" not in c:
-                doc_class_match = re.search(r'(\\documentclass(?:\[.*?\])?\{.*?\})', c)
-                if doc_class_match:
-                    pos = doc_class_match.end()
-                    c = c[:pos] + "\n\\usepackage[UTF8]{ctex}\n" + c[pos:]
-                else:
-                    c = "\\usepackage[UTF8]{ctex}\n" + c
-                with open(cand_path, "w", encoding="utf-8") as f:
-                    f.write(c)
-                print(f"Injected ctex package to {main_candidate}")
-            break
 
-    if output_zip:
-        print(f"Packing output to {output_zip}...")
-        with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(project_dir):
-                for file in files:
-                    abs_file = os.path.join(root, file)
-                    rel_file = os.path.relpath(abs_file, project_dir)
-                    zipf.write(abs_file, rel_file)
-        print(f"ZIP package created: {output_zip}")
+def doctor():
+    import importlib.util
+    checks={'python':sys.executable,'python_version':sys.version.split()[0],'pymupdf':bool(importlib.util.find_spec('pymupdf')),'xelatex':shutil.which('xelatex'),'bibtex':shutil.which('bibtex'),'biber':shutil.which('biber'),'uv':shutil.which('uv')}
+    print(json.dumps(checks,ensure_ascii=False,indent=2))
+    return checks['pymupdf'] and bool(checks['xelatex'])
 
-# ----------------------------------------------------------------------
-# 4. 主调度工作流：优先寻找 LaTeX 源码包，实在找不到才降级 PDF
-# ----------------------------------------------------------------------
-
-def auto_translate_paper(input_target, output_dir=None, provider="deepseek", max_workers=4,
-                         api_key=None, base_url=None, model=None, prompt_template=None, config=None):
-    """
-    全自动主工作流入口：
-    第一优先级：全网检索并下载 arXiv LaTeX 源码工程包，执行出版级保排版精翻（表格绝对冻结仅译 caption）；
-    兜底方案：若实在检索不到可用 LaTeX 源码，自动降级为 PDF 版面翻译（pdf2zh-next）。
-    """
-    env = os.environ.copy()
-    env["NO_PROXY"] = "127.0.0.1,localhost"
-    env["no_proxy"] = "127.0.0.1,localhost"
-
-    adapter = get_adapter(provider=provider, config=config, api_key=api_key, base_url=base_url, model=model)
-    prompt_tpl = prompt_template or DEFAULT_PROMPT_TEMPLATE
-
-    print(f"\n=======================================================")
-    print(f"[Workflow] 论文全自动翻译启动: {input_target}")
-    print(f"[Workflow] 规则准则: 优先寻找/解析 LaTeX 源码包，表格数据 100% 冻结")
-    print(f"=======================================================")
-
-    arxiv_id = None
-    local_tex_dir = None
-
-    if os.path.isdir(input_target):
-        local_tex_dir = os.path.abspath(input_target)
-    elif re.search(r'([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?)', input_target):
-        m = re.search(r'([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?)', input_target)
-        arxiv_id = m.group(1)
-    elif os.path.isfile(input_target) and input_target.lower().endswith(".pdf"):
-        print(f"[Workflow] 检查本地 PDF 关联的 arXiv 编号: {input_target}...")
-        arxiv_id = find_arxiv_id_from_pdf(input_target)
-        if not arxiv_id:
-            if fitz:
-                try:
-                    d = fitz.open(input_target)
-                    title = d.metadata.get("title", "")
-                    if not title or len(title) < 5:
-                        title = d[0].get_text()[:200].split("\n")[0]
-                    print(f"[Workflow] 从 PDF 提取标题进行 arXiv 检索: '{title}'...")
-                    arxiv_id = search_arxiv_by_title(title)
-                except Exception:
-                    pass
-
-    # --- 阶段 A：尝试获取并运行 LaTeX 源码工程 ---
-    if arxiv_id or local_tex_dir:
-        tex_work_dir = local_tex_dir
-        if not tex_work_dir:
-            temp_name = f"arxiv_{arxiv_id}_src"
-            target_source_dir = os.path.join(output_dir or os.getcwd(), temp_name)
-            success = fetch_arxiv_source(arxiv_id, target_source_dir)
-            if success:
-                tex_work_dir = target_source_dir
-
-        if tex_work_dir:
-            print(f"[Workflow] >>> 成功获取 LaTeX 源码工程！启用方案 1：LaTeX 出版级精翻模式 <<<")
-            print(f"[Workflow] 表格环境 (tabular/table) 数据绝对冻结，仅翻译 \\caption 表题。")
-            zip_out = os.path.join(output_dir or os.path.dirname(tex_work_dir), f"{os.path.basename(tex_work_dir)}_zh.zip")
-            process_latex_project(tex_work_dir, output_zip=zip_out, adapter=adapter, prompt_template=prompt_tpl, max_workers=max_workers)
-            print(f"[Workflow] LaTeX 源码精翻完成！Overleaf 标准工程包已生成: {zip_out}")
-            return True
-
-    # --- 阶段 B：未找到 LaTeX 源码，自动降级至 PDF 模式 ---
-    print(f"[Workflow] 未发现可用 LaTeX 源码工程，自动平滑降级至方案 2：PDF 版面分析翻译模式。")
-    if os.path.isfile(input_target) and input_target.lower().endswith(".pdf"):
-        from scripts.pdf_runner import run_pdf_translation
-        out_dir = output_dir or os.path.dirname(os.path.abspath(input_target))
-        return run_pdf_translation(input_target, out_dir, qps=max_workers, base_url=base_url, api_key=api_key, model=model)
-    else:
-        print(f"[Workflow] 错误: 既未找到 LaTeX 源码，也未提供有效的本地 PDF 文件进行降级。")
-        return False
 
 def main():
-    parser = argparse.ArgumentParser(description="Academic Paper Translation Toolkit (Zotero-Prompt Powered & Table Protected)")
-    parser.add_argument("--input", help="Auto pipeline: arXiv ID, paper title, or local PDF file / TeX directory")
-    parser.add_argument("--arxiv", help="Direct arXiv ID to download and translate")
-    parser.add_argument("--dir", help="LaTeX project directory to translate")
-    parser.add_argument("--file", help="Single TeX file to translate")
-    parser.add_argument("--pdf", help="Direct PDF fallback translate (requires pdf2zh-next)")
-    parser.add_argument("--output-dir", help="Output directory for generated files")
-    parser.add_argument("--output-zip", help="Path to save the translated project zip")
-    parser.add_argument("--provider", default="deepseek", choices=["deepseek", "cpa", "openai", "ollama"], help="LLM provider")
-    parser.add_argument("--api-key", help="API key for the chosen provider")
-    parser.add_argument("--base-url", help="Base URL for the chosen provider")
-    parser.add_argument("--model", help="Model name for the chosen provider")
-    parser.add_argument("--prompt-file", help="Custom prompt template file path")
-    parser.add_argument("--config", default="config.yaml", help="Path to config file (default: config.yaml)")
-    parser.add_argument("--workers", type=int, default=4, help="Parallel worker threads (default: 4)")
-    args = parser.parse_args()
+    p=argparse.ArgumentParser(description='Hermes verified academic paper translation')
+    group=p.add_mutually_exclusive_group()
+    for flag in ['--input','--arxiv','--dir','--pdf']:group.add_argument(flag)
+    p.add_argument('--output-dir');p.add_argument('--original');p.add_argument('--main')
+    p.add_argument('--config');p.add_argument('--provider',choices=['cpa','deepseek','ollama'],default='cpa')
+    p.add_argument('--workers',type=int,default=4);p.add_argument('--compile-timeout',type=int,default=180)
+    p.add_argument('--prompt',choices=['zotero_default','cs_ai_specialized','math_formula_preservation'],default='zotero_default')
+    p.add_argument('--no-fallback',action='store_true');p.add_argument('--doctor',action='store_true')
+    args=p.parse_args()
+    if args.doctor:return 0 if doctor() else 2
+    target=args.input or args.arxiv or args.dir or args.pdf
+    if not target:p.print_help();return 2
+    if not 1<=args.workers<=16:p.error('--workers must be 1..16')
+    try:
+        ok=auto_translate_paper(target,args.output_dir,args.provider,args.workers,load_config(args.config),args.original,args.main,args.no_fallback,args.prompt,args.compile_timeout)
+        return 0 if ok else 2
+    except Exception as e:print('Error:',str(e));return 2
 
-    config = load_config(args.config)
-    provider = args.provider
-    if not args.provider and "provider" in config:
-        provider = config["provider"]
 
-    adapter = get_adapter(provider=provider, config=config, api_key=args.api_key, base_url=args.base_url, model=args.model)
-    prompt_tpl = DEFAULT_PROMPT_TEMPLATE
-    if args.prompt_file and os.path.exists(args.prompt_file):
-        with open(args.prompt_file, "r", encoding="utf-8") as f:
-            prompt_tpl = f.read()
-
-    if args.input:
-        auto_translate_paper(args.input, output_dir=args.output_dir, provider=provider,
-                             max_workers=args.workers, api_key=args.api_key, base_url=args.base_url,
-                             model=args.model, prompt_template=prompt_tpl, config=config)
-    elif args.arxiv:
-        out_dir = args.output_dir or os.path.abspath(f"arxiv_{args.arxiv}_zh")
-        success = fetch_arxiv_source(args.arxiv, out_dir)
-        if success:
-            zip_out = args.output_zip or os.path.abspath(f"arxiv_{args.arxiv}_zh.zip")
-            process_latex_project(out_dir, output_zip=zip_out, adapter=adapter, prompt_template=prompt_tpl, max_workers=args.workers)
-    elif args.dir:
-        process_latex_project(args.dir, output_zip=args.output_zip, adapter=adapter, prompt_template=prompt_tpl, max_workers=args.workers)
-    elif args.file:
-        translate_tex_file(args.file, adapter=adapter, prompt_template=prompt_tpl, max_workers=args.workers)
-    elif args.pdf:
-        from scripts.pdf_runner import run_pdf_translation
-        out_dir = args.output_dir or os.path.dirname(os.path.abspath(args.pdf))
-        run_pdf_translation(args.pdf, out_dir, qps=args.workers, base_url=args.base_url, api_key=args.api_key, model=args.model)
-    else:
-        parser.print_help()
-
-if __name__ == "__main__":
-    main()
+if __name__=='__main__':sys.exit(main())
