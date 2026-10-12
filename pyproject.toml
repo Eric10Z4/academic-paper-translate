@@ -1,14 +1,15 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "academic-paper-translate"
-version = "1.0.0"
-description = "Precise academic paper translation with 100% layout and LaTeX formula preservation, powered by Zotero academic prompts."
+dynamic = ["version", "dependencies"]
+description = "Hermes academic translation with protected LaTeX sources, checked local compilation, and explicit PDF fallback."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Eric10Z4" }
 ]
@@ -22,17 +23,22 @@ keywords = [
     "deepseek",
     "gemini"
 ]
-dependencies = [
-    "requests>=2.31.0",
-    "PyMuPDF>=1.24.0",
-    "pyyaml>=6.0.1",
-    "tqdm>=4.66.0"
-]
-
 [project.optional-dependencies]
 pdf = [
-    "pdf2zh-next>=2.0.0"
+    "uv>=0.6"
 ]
 
 [project.scripts]
-paper-translate = "scripts.zotero_translate:main"
+paper-translate = "academic_paper_translate.scripts.zotero_translate:main"
+
+[tool.setuptools]
+packages = ["academic_paper_translate", "academic_paper_translate.scripts", "academic_paper_translate.adapters"]
+package-dir = { academic_paper_translate = "." }
+include-package-data = false
+
+[tool.setuptools.package-data]
+academic_paper_translate = ["VERSION", "prompts/*.txt", "config.example.json"]
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
+dependencies = { file = "requirements.txt" }

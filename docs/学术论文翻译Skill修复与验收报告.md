@@ -8,7 +8,7 @@
 
 ## 已部署与备份
 
-- 安装位置：`C:\Users\26730\AppData\Local\hermes\skills\academic-paper-translate`。
+- 安装位置：`<HERMES_SKILLS>/academic-paper-translate`。
 - 在第一次修改前，完整保存原技能 21 个文件及 SHA-256 清单到 `academic-paper-translate-original-2026-10-12.zip`，并检查 ZIP 完整性。原版备份保留原有配置和凭证，不是公开分发包。
 - 本次部署 24 个文件，逐文件校验与修复工作副本一致；公开修复包排除 `config.local.json`、缓存和字节码，另附 `修复版本文件校验.json`。
 - 桌面的原始规范和原始用户论文没有被改写。各端到端场景的输入散列验证均未改变。

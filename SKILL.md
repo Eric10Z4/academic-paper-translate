@@ -9,11 +9,13 @@ description: Translate English academic papers into Simplified Chinese, preferri
 
 ## Hermes 执行入口
 
-本机 Windows 的 Hermes terminal 使用 Bash。直接调用已安装翻译依赖的指定 Python，不启动 PowerShell，不把 PowerShell 的 `&` 或 `$env:...` 写入 Bash 命令：
+以下是已验收 Windows 安装的 Bash 示例；按实际安装位置设置解释器与技能目录。Hermes terminal 的 Shell 应以当前安装为准。直接调用已安装翻译依赖的指定 Python，不启动 PowerShell，不把 PowerShell 的 `&` 或 `$env:...` 写入 Bash 命令：
 
 ```bash
-PYTHONIOENCODING=utf-8 "C:/Users/26730/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe" -B "C:/Users/26730/AppData/Local/hermes/skills/academic-paper-translate/scripts/zotero_translate.py" --doctor
-PYTHONIOENCODING=utf-8 "C:/Users/26730/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe" -B "C:/Users/26730/AppData/Local/hermes/skills/academic-paper-translate/scripts/zotero_translate.py" --input "论文标题、arXiv编号、PDF绝对路径或TeX目录" --output-dir "论文归档目录" --workers 4
+PYTHON="$LOCALAPPDATA/hermes/hermes-agent/venv/Scripts/python.exe"
+SKILL_DIR="$LOCALAPPDATA/hermes/skills/academic-paper-translate"
+PYTHONIOENCODING=utf-8 "$PYTHON" -B "$SKILL_DIR/scripts/zotero_translate.py" --doctor
+PYTHONIOENCODING=utf-8 "$PYTHON" -B "$SKILL_DIR/scripts/zotero_translate.py" --input "论文标题、arXiv编号、PDF绝对路径或TeX目录" --output-dir "论文归档目录" --workers 4
 ```
 
 上例中的 Python 是本技能的依赖环境，不要求它与 Hermes 自身启动解释器相同。依赖缺失时，用同一个解释器安装根目录 `requirements.txt`；不要悄悄改用系统 Python。旧 `run.ps1` 仅为已有 PowerShell 调用保留，Hermes 不使用它。其他安装位置替换为对应的绝对路径；其他系统可直接用已安装依赖的 Python 执行 `scripts/zotero_translate.py`。

@@ -20,13 +20,19 @@ from concurrent.futures import ThreadPoolExecutor,as_completed
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
-from adapters import CPAAdapter,DeepSeekAdapter,OllamaAdapter
-from scripts.latex_syntax import ProjectPlan,IntegrityError,mask_latex_tokens,unmask_latex_tokens
-from scripts.latex_compiler import compile_latex_project,find_main_tex,make_side_by_side_dual_pdf,pack_source_zip
-from scripts.project_utils import atomic_json,copy_project,pdf_info,project_files,safe_extract_tar,sha256
+if not __package__:
+    sys.path.insert(0,str(ROOT))
+    __package__='scripts'
+if __package__ == 'scripts':
+    from adapters import CPAAdapter,DeepSeekAdapter,OllamaAdapter
+else:
+    from ..adapters import CPAAdapter,DeepSeekAdapter,OllamaAdapter
+from .latex_syntax import ProjectPlan,IntegrityError,mask_latex_tokens,unmask_latex_tokens
+from .latex_compiler import compile_latex_project,find_main_tex,make_side_by_side_dual_pdf,pack_source_zip
+from .project_utils import atomic_json,copy_project,pdf_info,project_files,safe_extract_tar,sha256
 
 DEFAULT_PROMPT_TEMPLATE=(ROOT/'prompts/zotero_default.txt').read_text(encoding='utf-8')
+VERSION=(ROOT/'VERSION').read_text(encoding='utf-8').strip()
 ARXIV_RE=re.compile(r'(?<![\w])((?:\d{4}\.\d{4,5}|[a-z][a-z.-]*/\d{7})(?:v\d+)?)(?![\w])',re.I)
 
 
@@ -47,7 +53,7 @@ def get_adapter(provider='cpa',config=None):
 
 def _download(url,target,limit=200*1024*1024):
     target=Path(target);target.parent.mkdir(parents=True,exist_ok=True)
-    req=urllib.request.Request(url,headers={'User-Agent':'academic-paper-translate/2.0 (research source retrieval)'})
+    req=urllib.request.Request(url,headers={'User-Agent':f'academic-paper-translate/{VERSION} (research source retrieval)'})
     temp=target.with_name(target.name+'.download')
     try:
         with urllib.request.urlopen(req,timeout=45) as response,open(temp,'wb') as f:
@@ -76,7 +82,7 @@ def search_arxiv_by_title(title):
     clean=normalized(title)
     if len(clean)<5:return None
     query=urllib.parse.urlencode({'search_query':'ti:"'+' '.join(clean.split()[:16])+'"','max_results':5})
-    req=urllib.request.Request('https://export.arxiv.org/api/query?'+query,headers={'User-Agent':'academic-paper-translate/2.0'})
+    req=urllib.request.Request('https://export.arxiv.org/api/query?'+query,headers={'User-Agent':f'academic-paper-translate/{VERSION}'})
     with urllib.request.urlopen(req,timeout=30) as response:root=ET.fromstring(response.read())
     ns={'a':'http://www.w3.org/2005/Atom'};matches=[]
     for entry in root.findall('a:entry',ns):
@@ -254,7 +260,7 @@ def _auto_translate_paper(input_target,output_dir=None,provider='cpa',max_worker
     previous=final/'translation_manifest.json'
     adoption = _check_output(final, identity, supplied)
     run=final/'.translation'/'runs'/uuid.uuid4().hex;run.mkdir(parents=True)
-    manifest={'schema_version':2,'skill_version':(ROOT/'VERSION').read_text(encoding='utf-8').strip(),'input_identity':identity,'status':'running','input':str(input_target),'provider':provider,'run_dir':str(run),'errors':[],'warnings':[]}
+    manifest={'schema_version':2,'skill_version':VERSION,'input_identity':identity,'status':'running','input':str(input_target),'provider':provider,'run_dir':str(run),'errors':[],'warnings':[]}
     if adoption: manifest['original_adoption'] = adoption
     atomic_json(previous,manifest)
     originals=run/'original.pdf';source=None;arxiv_id=None;translated=None
@@ -334,7 +340,7 @@ def _auto_translate_paper(input_target,output_dir=None,provider='cpa',max_worker
         if manifest.get('mode')!='latex_native':
             if no_fallback:raise RuntimeError('Native mode failed; fallback disabled')
             if not originals.exists():raise RuntimeError('No valid original PDF for fallback')
-            from scripts.pdf_runner import run_pdf_translation
+            from .pdf_runner import run_pdf_translation
             if not run_pdf_translation(str(originals),str(run),qps=max_workers,config=config,provider=provider):
                 raise RuntimeError('PDF fallback did not produce verified artifacts')
             manifest['mode']='pdf_fallback'

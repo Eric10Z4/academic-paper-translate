@@ -1,5 +1,49 @@
+# Private configuration and credentials
 config.local.json
+config.yaml
+config.local.yaml
+.env
+.env.*
+!.env.example
+
+# Python environments and build products
 __pycache__/
-*.pyc
+*.py[cod]
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Translation workspaces, logs, archives and private rollback copies
 .translation/
 .build/
+output/
+outputs/
+temp/
+tmp/
+cache/
+.cache/
+*.log
+*.zip
+*.tar.gz
+*.tgz
+*.bundle
+*.pdf
+!examples/*.pdf
+
+# Editor and OS state
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

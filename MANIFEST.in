@@ -1,0 +1,13 @@
+include VERSION requirements.txt LICENSE README.md README_EN.md SKILL.md AUDIT_SPEC.md
+include config.example.json
+recursive-include prompts *.txt
+recursive-include tests *.py
+recursive-include companion-skills SKILL.md
+global-exclude config.local.json config.yaml config.local.yaml .env .env.*
+global-exclude *.pyc *.log *.zip *.bundle
+prune .translation
+prune .build
+prune build
+prune dist
+prune .venv
+prune venv
