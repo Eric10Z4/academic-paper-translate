@@ -197,9 +197,10 @@ class CompilerTests(Case):
             (cwd/'main.aux').write_text(r'\bibdata{references}')
             make_pdf(cwd/'main.pdf')
             return 0,'Successful TeX pass'
-        with patch.object(lc,'_run',side_effect=execute):
+        with patch.object(lc.shutil,'which',return_value='xelatex'), patch.object(lc,'_run',side_effect=execute) as runner:
             ok,pdf,report=lc.compile_latex_project(root)
         self.assertFalse(ok);self.assertIsNone(pdf);self.assertIn('Bibliography failure',report)
+        self.assertIn('bibtex',[call.args[0][0] for call in runner.call_args_list])
     def test_ctex_switch_replaces_managed_block(self):
         root=self.project('Hello world.');p=root/'main.tex'
         lc.inject_chinese_support(p);lc.inject_chinese_support(p,True)
@@ -208,12 +209,15 @@ class CompilerTests(Case):
         self.assertEqual(out.count(lc.BEGIN),1)
     def test_failed_compile_cannot_reuse_old_pdf(self):
         root=self.project('Hello world.');make_pdf(root/'main.pdf');before=(root/'main.pdf').read_bytes()
-        with patch.object(lc,'_run',return_value=(1,'fatal simulated')):
+        with patch.object(lc.shutil,'which',return_value='xelatex'), patch.object(lc,'_run',return_value=(1,'fatal simulated')) as runner:
             ok,pdf,report=lc.compile_latex_project(root)
         self.assertFalse(ok);self.assertIsNone(pdf);self.assertEqual(before,(root/'main.pdf').read_bytes())
+        self.assertTrue(runner.called);self.assertIn('fatal simulated',report)
     def test_bbl_preserved_during_retry_and_pack(self):
         root=self.project('Hello world.');bbl=root/'main.bbl';bbl.write_text('Only bibliography source')
-        with patch.object(lc,'_run',return_value=(1,'fatal')):lc.compile_latex_project(root)
+        with patch.object(lc.shutil,'which',return_value='xelatex'), patch.object(lc,'_run',return_value=(1,'fatal')) as runner:
+            lc.compile_latex_project(root)
+        self.assertTrue(runner.called)
         self.assertTrue(bbl.exists())
         archive=root/'chinese_source.zip';lc.pack_source_zip(root,archive)
         with zipfile.ZipFile(archive) as zf:
