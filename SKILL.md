@@ -9,14 +9,14 @@ description: Translate English academic papers into Simplified Chinese, preferri
 
 ## Hermes 执行入口
 
-Windows 下使用 Hermes 实际安装环境，不能使用路径中碰巧名为 python 的其他解释器。首选运行技能自带的入口：
+本机 Windows 的 Hermes terminal 使用 Bash。直接调用已安装翻译依赖的指定 Python，不启动 PowerShell，不把 PowerShell 的 `&` 或 `$env:...` 写入 Bash 命令：
 
-```powershell
-& "$env:LOCALAPPDATA\hermes\skills\academic-paper-translate\scripts\run.ps1" --doctor
-& "$env:LOCALAPPDATA\hermes\skills\academic-paper-translate\scripts\run.ps1" --input "论文标题、arXiv编号、PDF绝对路径或TeX目录" --output-dir "新的独立输出目录" --workers 4
+```bash
+PYTHONIOENCODING=utf-8 "C:/Users/26730/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe" -B "C:/Users/26730/AppData/Local/hermes/skills/academic-paper-translate/scripts/zotero_translate.py" --doctor
+PYTHONIOENCODING=utf-8 "C:/Users/26730/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe" -B "C:/Users/26730/AppData/Local/hermes/skills/academic-paper-translate/scripts/zotero_translate.py" --input "论文标题、arXiv编号、PDF绝对路径或TeX目录" --output-dir "论文归档目录" --workers 4
 ```
 
-`run.ps1` 固定使用 Hermes 的 `hermes-agent\venv\Scripts\python.exe`。依赖缺失时，使用同一个解释器安装根目录 `requirements.txt`；不要悄悄改用系统 Python。其他系统可直接用已安装依赖的 Python 执行 `scripts/zotero_translate.py`。
+上例中的 Python 是本技能的依赖环境，不要求它与 Hermes 自身启动解释器相同。依赖缺失时，用同一个解释器安装根目录 `requirements.txt`；不要悄悄改用系统 Python。旧 `run.ps1` 仅为已有 PowerShell 调用保留，Hermes 不使用它。其他安装位置替换为对应的绝对路径；其他系统可直接用已安装依赖的 Python 执行 `scripts/zotero_translate.py`。
 
 完整论文可能超过 Hermes 终端默认前台时限。请用终端工具的 `background=true, notify=true` 启动，再用 process 工具等待结束并读取日志；不要反复重启同一个输出目录，也不要让前台超时杀掉编译或翻译进程。若上次进程被外部终止，先核对 `.translation/active.lock` 中的 PID；仅确认该进程已经退出后，才清理这份锁文件重试，保留原有日志与缓存。
 
@@ -27,9 +27,11 @@ Windows 下使用 Hermes 实际安装环境，不能使用路径中碰巧名为 
 - 优先从用户给定 TeX 工程或 arXiv 获取源码。标题仅在高置信匹配时采用；无法确定时说明需要论文编号或原 PDF，不把其他论文冒充目标论文。
 - 本地 PDF 路径优先按文件识别，即使文件名包含 arXiv 编号。若无可用源码，自动采用 PDF 降级流程。
 - 原工程只读，翻译和编译均在输出目录的 `.translation` 工作副本中进行。不要把输出目录设置成原工程根目录。
+- 已经下载 `论文目录/original.pdf` 时，将这个文件作为 `--input`，将其父目录作为 `--output-dir`，即可原地归档。程序确认预存原文与输入的 SHA-256 一致后接纳，并保留原文件；TeX 工程配有原文或明确传入 `--original` 时同样适用。仅有标题或编号不能证明已有 PDF 属于该论文，需明确指定原文。未登记的旧译文、不同论文记录或不同内容的原文仍会拒绝；同一输入的已登记目录可以续跑，其他笔记文件不受影响。
 - 多主文件工程用 `--main 相对路径`。如有官方英文 PDF，使用 `--original 绝对路径`。仅有源码时会编译原英文工程作为对照，并在记录中标注来源，不能称其为另行取得的官方 PDF。
 - 模型请求只包含可编辑自然语言和不透明占位符；表格数据、公式、数值和原始引用键不会被发送。占位符有缺失、重复、变化或顺序破坏时重试，仍失败则停止原生分支并留档。
-- 遇到动态输入路径、未知宏、环境不平衡、非 UTF-8 源码等无法可靠处理的结构，程序明确失败并尝试降级。自定义无参宏仅在定义能证明为纯文字时放行；可能隐藏表格或数学边界的宏不得当成普通标记。不要声称任意 TeX 宏都已自动支持。
+- 自定义无参宏按实际定义检查：支持 `newcommand` 等声明、无参数的 `def/gdef`、简单 `let` 别名，以及纯文字、常见文字字体包装、`xspace`、嵌套安全宏和受限的 `ensuremath` 表达式。安全宏本身完整冻结，不交给模型翻译；名称不构成白名单，重新定义过的常见命令也会检查。参数宏、条件展开、递归、隐藏环境/输入/赋值等未经支持的结构继续明确拒绝。只分析已遍历源文件中的定义，不承诺理解任意 `.sty/.cls` 或动态 TeX；需要翻译的长文本不要藏在缩写宏里。
+- 遇到动态输入路径、无法证明安全的宏、未知环境、环境不平衡、非 UTF-8 源码等，程序保留原因并尝试降级。不要通过删除校验或凭名称加白名单提高原生成功率。
 - 默认采用 Zotero 学术提示词。`--prompt cs_ai_specialized` 或 `--prompt math_formula_preservation` 可选择专门提示词；不要自加解读要求。
 
 ## 检查与交付
@@ -53,4 +55,4 @@ PDF 降级固定使用 pdf2zh-next 2.9.0，关闭表格文字翻译并启用图�
 
 ## 维护与测试
 
-修改后用 Hermes 的 Python 运行 `tests/test_regression.py`。真实翻译验收通过 Hermes 加载本技能并执行 `tests/run_acceptance.py --workspace 独立测试目录`；该测试会实际调用现有 CPA，覆盖多文件表格、公式、引用、仅有 bbl、纯 PDF 降级和编译失败降级。测试前读 [AUDIT_SPEC.md](AUDIT_SPEC.md)，验收日志不能用模型口头声明替代。
+修改后用 Hermes 的 Python 运行 `-B -m unittest discover -s 技能绝对路径/tests -p 'test_*.py' -v`，包含原有回归和兼容性回归。真实翻译验收通过 Hermes 加载本技能并执行 `tests/run_acceptance.py --workspace 独立测试目录`；该测试实际调用现有 CPA，覆盖多文件表格、公式、引用、仅有 bbl、纯 PDF 降级、编译失败降级、安全宏原生编译、预存原文归档和同输入缓存续跑。测试前读 [AUDIT_SPEC.md](AUDIT_SPEC.md)，验收日志不能用模型口头声明替代。

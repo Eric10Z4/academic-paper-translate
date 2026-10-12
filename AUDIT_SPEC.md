@@ -4,7 +4,7 @@
 
 ## 确定性回归
 
-通过 Hermes 加载本技能，使用 Hermes 的 `hermes-agent/venv/Scripts/python.exe` 执行 `tests/test_regression.py`。该测试不调用真实模型，采用受控故障，要求所有测试通过。覆盖：
+通过 Hermes 加载本技能，按 SKILL.md 的 Bash 入口调用指定 Python，执行 `-B -m unittest discover -s 技能绝对路径/tests -p 'test_*.py' -v`。同时运行 `test_regression.py` 与 `test_compatibility.py`；这些测试不调用真实模型，采用受控故障，要求全部通过。覆盖：
 
 - 表格各环境、空行、嵌套、input 子文件以及跨文件环境状态。
 - 行内和展示数学、代码、引用可选参数、占位符缺失、重复和重排。
@@ -13,15 +13,20 @@
 - 旧 PDF 不得覆盖失败状态，bbl 不丢失，xeCJK 管理区块实际切换。
 - 双语页数采用较大值，不截断尾页，并保留支持的页面链接。
 - 论文标题、本地编号 PDF、不同后端、异常降级、失败退出码、只读输入、归档解压路径边界。
+- 格式化缩写、嵌套安全宏、无参声明、别名、受限 ensuremath、后随独立文字组；危险同名定义、晚重定义、作用域替代、递归和参数宏在模型调用前被拒绝。
+- 同目录预存原文的接纳与续跑，内容不匹配、未登记译文、输入与 --original 冲突、运行中原文被修改等情形不得覆盖原文件。
 
 ## 真实翻译验收
 
-仅通过 Hermes 启动 `tests/run_acceptance.py --workspace 独立目录`。它会使用当前配置的 CPA 模型进行真实翻译，不使用固定假译文。四个基本场景为：
+仅通过 Hermes 启动 `tests/run_acceptance.py --workspace 独立目录`。它会使用当前配置的 CPA 模型进行真实翻译，不使用固定假译文。默认七个场景为：
 
 1. 多文件双栏工程：caption 可选参数、数学表达式、跨文件表格、正文百分号、BibTeX 和引用。要求 `complete_native`，冻结行文件、公式和引用键保持一致。
 2. 仅有 bbl 的工程：无 bib 文件仍能编译，交付 ZIP 保留 bbl 并能独立重编译。
 3. 无公开源码的本地 PDF：要求 `complete_fallback`，标准三 PDF 齐全，页面数不丢失。
 4. 无法编译的源码加原 PDF：要求自动进入降级并保留未编译源码 ZIP。
+5. 格式化缩写、嵌套宏、def、let 和 ensuremath 的双栏工程：目标目录预存匹配 original.pdf，要求 complete_native，宏定义文件与表格行字节不变，交付源码包重编译成功。
+6. 同一宏工程续跑：复用此前真实翻译且重新通过完整性检查的缓存，仍要求原生编译成功。
+7. 以归档目录内 original.pdf 为输入、其父目录为输出：完成真实 PDF 降级，原文件内容与修改时间均保持不变。
 
 每个场景必须检查输入文件散列不变、manifest 实际状态、PDF 可读性、页数和源码包内容。编译、合成和源码 ZIP 重编译记录均位于本次 `.translation/runs` 目录。至少渲染并人工查看实际交付 PDF 的代表页面，包括公式、表格和尾页；自动测试不能取代视觉和语义检查。
 

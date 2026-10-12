@@ -37,6 +37,130 @@ TOKEN_RE = re.compile(r'§LATEX_REF_\d+§')
 COMMAND_RE = re.compile(r'\\([A-Za-z@]+|[^\r\n])\*?')
 LETTERS = re.compile(r'[A-Za-z]{3,}')
 
+# These are formatting/symbol primitives, never guessed academic macro names.
+# User definitions take precedence and are checked recursively before acceptance.
+INLINE_LEAVES = set('xspace space relax protect leavevmode normalfont bfseries itshape slshape scshape rmfamily sffamily ttfamily TeX LaTeX LaTeXe ldots dots checkmark textregistered textcopyright texttrademark'.split())
+INLINE_WRAPPERS = set('textbf textit textsl textsc textrm textsf texttt textnormal emph underline mbox MakeUppercase MakeLowercase'.split())
+MATH_LEAVES = set('alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa lambda mu nu xi pi varpi rho varrho sigma varsigma tau upsilon phi varphi chi psi omega Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega infty partial nabla sum prod int log exp sin cos tan min max lim cdot times pm mp leq geq neq approx in notin subset subseteq cup cap forall exists to mapsto rightarrow leftarrow checkmark ell'.split())
+MATH_WRAPPERS = set('mathcal mathbb mathrm mathbf mathit mathsf mathtt operatorname overline underline hat bar vec dot ddot'.split())
+DEFINITIONS = {'newcommand','renewcommand','providecommand','DeclareRobustCommand','def','gdef','edef','xdef','let'}
+
+
+def skip_space(text, pos):
+    while pos < len(text):
+        if text[pos].isspace(): pos += 1
+        elif text[pos] == '%':
+            end = text.find('\n', pos)
+            pos = len(text) if end < 0 else end + 1
+        else: break
+    return pos
+
+
+class MacroRules:
+    """Prove a bounded subset of zero-argument expansions structurally neutral.
+
+    Keep every encountered definition, including scoped/repeated definitions.
+    An unsafe alternative invalidates all uses: a local safe override must not
+    accidentally authorize an unsafe definition after its TeX scope ends.
+    No arbitrary TeX expansion or execution is performed.
+    """
+    def __init__(self):
+        self.definitions = {}
+        self.uses = {}
+        self._safe_cache = {}
+
+    def read_definition(self, kind, text, pos):
+        p = skip_space(text, pos)
+        if p < len(text) and text[p] == '{':
+            end = balanced(text, p)
+            token = text[p+1:end-1].strip()
+            p = end
+        else:
+            start = p
+            _, p = command_at(text, p)
+            token = text[start:p]
+        match = re.fullmatch(r'\\([A-Za-z@]+)', token)
+        if not match: raise IntegrityError('Unsupported macro definition target')
+        name = match.group(1)
+        p = skip_space(text, p)
+        safe_signature = True
+        if kind == 'let':
+            if p < len(text) and text[p] == '=': p = skip_space(text, p+1)
+            if p >= len(text): raise IntegrityError('Incomplete macro alias')
+            end = command_at(text, p)[1] if text[p] == '\\' else p+1
+            body = text[p:end]
+        elif kind in {'def','gdef','edef','xdef'}:
+            start = p
+            while p < len(text) and text[p] != '{': p += 1
+            safe_signature = not text[start:p].strip() and kind in {'def','gdef'}
+            end = balanced(text, p)
+            body = text[p+1:end-1]
+        else:
+            optionals = []
+            while p < len(text) and text[p] == '[':
+                end = balanced(text, p, '[', ']')
+                optionals.append(text[p+1:end-1].strip())
+                p = skip_space(text, end)
+            safe_signature = optionals in ([], ['0'])
+            end = balanced(text, p)
+            body = text[p+1:end-1]
+        self.definitions.setdefault(name, []).append(body if safe_signature else None)
+        return end
+
+    def note_use(self, name, path, required=False):
+        paths, needs_rule = self.uses.setdefault(name, (set(), False))
+        paths.add(path.name)
+        self.uses[name] = paths, needs_rule or required
+
+    def safe(self, name, trail=(), math=False):
+        if len(trail) >= 32 or name in trail: return False
+        if (name,math) in self._safe_cache: return self._safe_cache[name,math]
+        if name in self.definitions:
+            result = all(body is not None and self.safe_body(body, trail+(name,), math)
+                         for body in self.definitions[name])
+            self._safe_cache[name,math] = result
+            return result
+        return name in INLINE_LEAVES or (math and name in MATH_LEAVES)
+
+    def safe_body(self, body, trail=(), math=False):
+        if len(body) > 4096 or len(trail) >= 32: return False
+        i = 0
+        while i < len(body):
+            c = body[i]
+            if c == '%': i = skip_space(body, i); continue
+            if c == '{':
+                end = balanced(body, i)
+                if not self.safe_body(body[i+1:end-1], trail+('{',), math): return False
+                i = end; continue
+            if c == '\\':
+                name, end = command_at(body, i)
+                if name in self.definitions:
+                    if not self.safe(name, trail, math): return False
+                elif name in INLINE_WRAPPERS or name == 'ensuremath' or (math and name in MATH_WRAPPERS | {'frac','sqrt'}):
+                    p = skip_space(body, end)
+                    if math and name == 'sqrt' and p < len(body) and body[p] == '[':
+                        end = balanced(body, p, '[', ']')
+                        if not self.safe_body(body[p+1:end-1], trail+('[',), True): return False
+                        p = skip_space(body, end)
+                    for _ in range(2 if name == 'frac' else 1):
+                        if p >= len(body) or body[p] != '{': return False
+                        end = balanced(body, p)
+                        if not self.safe_body(body[p+1:end-1], trail+('arg',), math or name == 'ensuremath'): return False
+                        p = skip_space(body, end)
+                elif name not in {' ', ',', ';', ':', '!', '/', '%', '&', '#', '_', '{', '}'} and not self.safe(name, trail, math):
+                    return False
+                i = end; continue
+            if c in '\\}$&#' or (not math and c in '^_'): return False
+            i += 1
+        return True
+
+    def issues(self):
+        result = []
+        for name, (paths, required) in self.uses.items():
+            if (required or name in self.definitions) and not self.safe(name):
+                result.append(f'Unknown or structurally unsafe macro \\{name} in {", ".join(sorted(paths))}; add an explicit safe rule or expand it first')
+        return result
+
 
 def command_at(text, pos):
     m = COMMAND_RE.match(text, pos)
@@ -103,10 +227,19 @@ def unmask_latex_tokens(text, mapping, escape=False):
         for token, raw in mapping.items(): text = text.replace(token, raw)
         return text
     result, p = [], 0
+    def append(fragment):
+        if not fragment: return
+        # XeTeX can tokenize Chinese letters as part of a control word. A model
+        # may remove the source delimiter after an opaque no-argument command.
+        # Add a TeX-consumed delimiter outside the frozen token, never alter it.
+        if result and fragment[0].isalpha() and re.search(r'\\[A-Za-z@]+$', result[-1]):
+            result.append(' ')
+        result.append(fragment)
     for m in TOKEN_RE.finditer(text):
-        result.extend([escape_prose(text[p:m.start()]), mapping[m.group()]])
+        append(escape_prose(text[p:m.start()]))
+        append(mapping[m.group()])
         p = m.end()
-    result.append(escape_prose(text[p:]))
+    append(escape_prose(text[p:]))
     return ''.join(result)
 
 
@@ -171,7 +304,7 @@ class ProjectPlan:
         self.sources, self.segments, self.issues = {}, [], []
         self.contexts, self.visiting = {}, set()
         self.prose_envs=PROSE_ENVS.copy()
-        self.literal_macros=set()
+        self.macros=MacroRules()
         self._keys = set()
         self.state = State()
         self._file(self.main, self.state)
@@ -181,6 +314,7 @@ class ProjectPlan:
         for a, b in zip(self.segments, self.segments[1:]):
             if a.path == b.path and a.end > b.start:
                 raise IntegrityError('Overlapping editable spans')
+        self.issues.extend(self.macros.issues())
         if self.issues: raise IntegrityError('; '.join(sorted(set(self.issues))))
 
     def _file(self, path, state):
@@ -252,6 +386,9 @@ class ProjectPlan:
                 i=end;continue
             if c=='\\':
                 name,end=command_at(text,i)
+                if name in DEFINITIONS:
+                    flush();i=self.macros.read_definition(name,text,end);continue
+                if enabled or name in {'begin','end','input','include'}:self.macros.note_use(name,path)
                 if name in {'verb','lstinline'}:
                     delim=text[end:end+1]
                     p=text.find(delim,end+1,stop) if delim else -1
@@ -302,6 +439,7 @@ class ProjectPlan:
                 is_caption=name in {'caption','captionof'}
                 allowed=(enabled or (is_caption and state.active and any(e in TABLE_ENVS|FIGURE_ENVS for e in state.envs)) or (name in {'title','subtitle','icmltitlerunning','keywords'} and not state.active))
                 if name in TEXT_ARGS and allowed:
+                    self.macros.note_use(name,path)
                     flush();args,argend=arguments(text,end,limit=max(TEXT_ARGS[name])+1)
                     n=0
                     for op,a,b in args:
@@ -311,32 +449,22 @@ class ProjectPlan:
                     i=argend;continue
                 if name.startswith('cite') or name in OPAQUE:
                     args,argend=arguments(text,end)
-                    if name in {'newcommand','renewcommand','providecommand','DeclareRobustCommand'}:
-                        groups=[(a,b) for op,a,b in args if op=='{']
-                        if len(groups)>=2:
-                            macro=text[groups[0][0]+1:groups[0][1]-1]
-                            defined=re.fullmatch(r'\\([A-Za-z]+)',macro)
-                            if defined:
-                                defined=defined.group(1);self.literal_macros.discard(defined)
-                                body=text[groups[-1][0]+1:groups[-1][1]-1]
-                                if not any(op=='[' for op,_,_ in args) and re.fullmatch(r'[A-Za-z0-9 .,;:!?-]+',body):
-                                    self.literal_macros.add(defined)
                     if name=='newtheorem':
                         groups=[(a,b) for op,a,b in args if op=='{']
                         if groups:self.prose_envs.add(text[groups[0][0]+1:groups[0][1]-1])
                     if enabled:emit(i,argend)
                     i=argend;continue
-                if name in NOARGS or not name.isalpha():
+                if name in NOARGS or name in INLINE_LEAVES or not re.fullmatch(r'[A-Za-z@]+',name):
                     if enabled:emit(i,end)
                     i=end;continue
-                # An unknown zero-argument macro can open a table or math mode.
-                # Accept only definitions proven to expand to plain literal text.
-                args,argend=arguments(text,end)
+                # A proven zero-argument macro consumes only its command token.
+                # Following {} or a prose group is not a hidden macro argument.
                 if enabled:
-                    if name not in self.literal_macros or args:
-                        self.issues.append(f'Unknown macro \\{name} in {path.name}; add an explicit safe rule or expand it first')
-                    emit(i,argend)
-                i=argend;continue
+                    self.macros.note_use(name,path,required=True)
+                    emit(i,end)
+                else:
+                    _,end=arguments(text,end)
+                i=end;continue
             if not enabled:
                 flush();i+=1;continue
             if c in '{}~&#^_':emit(i,i+1);i+=1;continue

@@ -195,33 +195,82 @@ def _identity(target,original=None,exclude=()):
     return 'query:'+target.strip()
 
 
+def _supplied_original(target, original=None):
+    explicit = Path(original).expanduser().resolve() if original else None
+    if explicit is not None and not explicit.is_file():
+        raise ValueError('Explicit original PDF does not exist')
+    if target.is_file() and target.suffix.lower() == '.pdf':
+        if explicit is not None and sha256(explicit) != sha256(target):
+            raise ValueError('Explicit original PDF differs from the input PDF')
+        return target.resolve()
+    if explicit is not None: return explicit
+    candidate = target / 'original.pdf' if target.is_dir() else None
+    return candidate if candidate is not None and candidate.is_file() else None
+
+
+def _check_output(final, identity, supplied):
+    previous = final / 'translation_manifest.json'
+    previous_data = {}
+    if previous.exists():
+        previous_data = json.loads(previous.read_text(encoding='utf-8'))
+        if previous_data.get('input_identity') != identity:
+            raise ValueError('Output belongs to different input; choose a new directory')
+    else:
+        artifacts = ['chinese_mono.pdf','chinese_source.zip','chinese_source_uncompiled.zip','bilingual_dual.pdf']
+        if any((final / name).exists() for name in artifacts):
+            raise ValueError('Untracked existing translated artifacts in output; choose a separate directory')
+    existing = final / 'original.pdf'
+    if existing.exists():
+        if not existing.is_file(): raise ValueError('Existing original.pdf is not a regular file')
+        if supplied is not None:
+            digest = sha256(supplied)
+            if sha256(existing) != digest:
+                raise ValueError('Existing original.pdf differs from the supplied input; it will not be overwritten')
+            pdf_info(existing)
+            return {'path':str(existing),'sha256':digest,'action':'preserved_matching_original'}
+        if not previous.exists():
+            raise ValueError('Existing original.pdf is unverified; use its path as --input or explicitly supply --original')
+        digest = previous_data.get('artifacts',{}).get('original.pdf',{}).get('sha256')
+        digest = digest or previous_data.get('original_adoption',{}).get('sha256')
+        if not digest or sha256(existing) != digest:
+            raise ValueError('Tracked original.pdf is missing verification or has changed; it will not be overwritten')
+        pdf_info(existing)
+        return {'path':str(existing),'sha256':digest,'action':'verified_tracked_original',
+                'provenance':previous_data.get('original_provenance','previous_verified_pdf')}
+    return None
+
+
 def _auto_translate_paper(input_target,output_dir=None,provider='cpa',max_workers=4,config=None,original=None,main_tex=None,no_fallback=False,prompt_name='zotero_default',compile_timeout=180):
     config=load_config() if config is None else config
     target=Path(input_target).expanduser()
     final=Path(output_dir or ((target if target.is_dir() else target.parent)/(target.stem+'_translated') if target.exists() else Path.cwd()/('paper_'+hashlib.sha256(input_target.encode()).hexdigest()[:10]))).resolve()
     if target.is_dir() and final==target.resolve():raise ValueError('Output cannot be the original project directory')
     final.mkdir(parents=True,exist_ok=True)
+    supplied = _supplied_original(target, original)
     identity=_identity(input_target,original,exclude=[final])
     if original:
         if not Path(original).is_file():raise ValueError('Explicit original PDF does not exist')
         identity+=':original:'+sha256(original)
     previous=final/'translation_manifest.json'
-    if previous.exists():
-        if json.loads(previous.read_text(encoding='utf-8')).get('input_identity')!=identity:raise ValueError('Output belongs to different input; choose a new directory')
-    elif any((final/name).exists() for name in ['chinese_mono.pdf','original.pdf','chinese_source.zip','bilingual_dual.pdf']):
-        raise ValueError('Untracked existing artifacts in output; use an empty directory')
+    adoption = _check_output(final, identity, supplied)
     run=final/'.translation'/'runs'/uuid.uuid4().hex;run.mkdir(parents=True)
     manifest={'schema_version':2,'skill_version':(ROOT/'VERSION').read_text(encoding='utf-8').strip(),'input_identity':identity,'status':'running','input':str(input_target),'provider':provider,'run_dir':str(run),'errors':[],'warnings':[]}
+    if adoption: manifest['original_adoption'] = adoption
     atomic_json(previous,manifest)
     originals=run/'original.pdf';source=None;arxiv_id=None;translated=None
     try:
         import pymupdf
+        if supplied is not None:
+            shutil.copy2(supplied,originals);manifest['original_provenance']='user_supplied_pdf'
+        elif adoption and target.is_dir():
+            # The unchanged TeX input is already bound to this verified PDF.
+            # Recompiling the English PDF only changes timestamps and must not
+            # turn an otherwise valid cached rerun into a content conflict.
+            shutil.copy2(adoption['path'],originals)
+            manifest['original_provenance']=adoption['provenance']
         if target.is_dir():
             source=copy_project(target,run/'source',exclude=[final])
-            candidate=Path(original) if original else target/'original.pdf'
-            if candidate.is_file():shutil.copy2(candidate,originals);manifest['original_provenance']='user_supplied_pdf'
         elif target.is_file() and target.suffix.lower()=='.pdf':
-            shutil.copy2(target,originals);manifest['original_provenance']='user_supplied_pdf'
             try:
                 arxiv_id=find_arxiv_id_from_pdf(target)
                 if not arxiv_id:
@@ -298,7 +347,14 @@ def _auto_translate_paper(input_target,output_dir=None,provider='cpa',max_worker
             if not any(re.search(r'[\u3400-\u9fff]',p.get_text()) for p in d):raise ValueError('Chinese PDF has no extractable Chinese text')
         if manifest['mode']=='latex_native':required.append('chinese_source.zip')
         elif (run/'chinese_source_uncompiled.zip').exists():required.append('chinese_source_uncompiled.zip')
-        for name in required:shutil.copy2(run/name,final/name)
+        # A pre-downloaded original can be the input itself. Never replace it,
+        # including on a resumed run; validate before publishing any artifacts.
+        preserve_original = (final/'original.pdf').exists()
+        if preserve_original and sha256(final/'original.pdf') != sha256(originals):
+            raise ValueError('Existing original.pdf changed or differs from this run; no artifacts published')
+        for name in required:
+            if name == 'original.pdf' and preserve_original: continue
+            shutil.copy2(run/name,final/name)
         manifest['artifacts']={name:(info[name] if name in info else {'sha256':sha256(final/name),'bytes':(final/name).stat().st_size}) for name in required}
         warnings=manifest.get('compile',{}).get('layout_warnings',[])
         manifest['warnings'].extend(warnings)

@@ -100,7 +100,43 @@ The baseline reaches an accuracy of 75 percent. The proposed method reaches an a
 This article contains ordinary English prose for translation.
 \end{document}
 ''',encoding='utf-8')
-    return {'complex_native':p,'bbl_only':b,'pdf_only':base/'pdf_only.pdf','broken_native':bad}
+    macro=base/'macro_native';macro.mkdir(exist_ok=True)
+    (macro/'macros.tex').write_text(r'''\newcommand{\modelname}{\textsc{ModelAlpha}}
+\newcommand{\sys}{\modelname\xspace}
+\DeclareRobustCommand{\eg}{\emph{e.g.}\xspace}
+\newcommand\ie{\textit{i.e.}\xspace}
+\newcommand{\etal}{\textit{et al.}\xspace}
+\def\wrt{w.r.t.\xspace}
+\let\methodalias=\sys
+\newcommand{\loss}{\ensuremath{\mathcal{L}_{\alpha}+\frac{1}{2}}}
+''',encoding='utf-8')
+    (macro/'main.tex').write_text(r'''\documentclass[twocolumn]{article}
+\usepackage{amsmath,amssymb,xspace}
+\input{macros}
+\title{A controlled evaluation of recognition methods}
+\author{A. Author}\date{}
+\begin{document}\maketitle
+\section{Method}\label{sec:method}
+The \sys{} method learns features from images. The evaluation considers several settings, \eg recognition with limited training data. The protocol is fixed, \ie all methods use the same test set. Smith \etal report a similar setting.
+The objective \loss decreases during training. We evaluate the classifier \wrt the same reference labels. The alias \methodalias denotes the same system.
+\begin{table}[h]\centering
+\caption{Recognition accuracy under a fixed evaluation protocol.}\label{tab:accuracy}
+\begin{tabular}{lrr}
+Method & Accuracy & Samples \\
+\input{rows}
+\end{tabular}\end{table}
+Table~\ref{tab:accuracy} reports the results for the method in Section~\ref{sec:method}. The score is 90.3 percent on this dataset. These results do not establish that the method is optimal for other tasks.
+\end{document}
+''',encoding='utf-8')
+    (macro/'rows.tex').write_text('BaselineAlpha & 75.0 & 1000 \\\\\nModelAlpha & 90.3 & 2000 \\\\\n',encoding='utf-8')
+    if not (macro/'original.pdf').exists():
+        ok,pdf,log=compile_latex_project(macro,chinese=False)
+        if not ok:raise RuntimeError(log)
+        shutil.copy2(pdf,macro/'original.pdf')
+    archive=base/'archive_pdf';archive.mkdir(exist_ok=True)
+    if not (archive/'original.pdf').exists():shutil.copy2(base/'pdf_only.pdf',archive/'original.pdf')
+    return {'complex_native':p,'bbl_only':b,'pdf_only':base/'pdf_only.pdf','broken_native':bad,
+            'macro_native':macro,'macro_native_resume':macro,'archive_pdf':archive/'original.pdf'}
 
 
 def snapshot(root):
@@ -113,12 +149,31 @@ def run(base,cases):
     base=Path(base).resolve();fixtures=create_fixtures(base/'inputs')
     result={'runner':sys.executable,'root':str(ROOT),'cases':[]}
     for name in cases:
-        source=fixtures[name];before=snapshot(source);output=base/'outputs'/name
-        ok=z.auto_translate_paper(str(source),str(output),max_workers=2,no_fallback=name in {'complex_native','bbl_only'})
+        source=fixtures[name];before=snapshot(source)
+        output=source.parent if name=='archive_pdf' else base/'outputs'/('macro_native' if name=='macro_native_resume' else name)
+        native=name in {'complex_native','bbl_only','macro_native','macro_native_resume'}
+        if name=='macro_native':
+            import shutil
+            output.mkdir(parents=True,exist_ok=True)
+            if not (output/'original.pdf').exists():shutil.copy2(source/'original.pdf',output/'original.pdf')
+        existing=output/'original.pdf'
+        original_stat=(sha256(existing),existing.stat().st_mtime_ns) if existing.exists() else None
+        ok=z.auto_translate_paper(str(source),str(output),max_workers=2,no_fallback=native)
         manifest=json.loads((output/'translation_manifest.json').read_text(encoding='utf-8'))
         row={'name':name,'returned_success':ok,'status':manifest['status'],'mode':manifest.get('mode'),'input_unchanged':before==snapshot(source),'manifest':str(output/'translation_manifest.json'),'checks':{}}
-        row['checks']['complete_expected_mode']=manifest['status']==('complete_native' if name in {'complex_native','bbl_only'} else 'complete_fallback')
+        row['checks']['complete_expected_mode']=manifest['status']==('complete_native' if native else 'complete_fallback')
         row['checks']['original_preserved']=row['input_unchanged']
+        if original_stat:
+            row['checks']['preexisting_original_bytes_and_mtime_unchanged']=original_stat==(sha256(existing),existing.stat().st_mtime_ns)
+            row['checks']['adoption_recorded']=manifest.get('original_adoption',{}).get('action') in {'preserved_matching_original','verified_tracked_original'}
+        if name in {'macro_native','macro_native_resume'} and (output/'chinese_source.zip').exists():
+            with zipfile.ZipFile(output/'chinese_source.zip') as archive:
+                for filename in ['macros.tex','rows.tex']:
+                    row['checks'][filename+'_byte_identical']=archive.read(filename)==(source/filename).read_bytes()
+                main=archive.read('main.tex').decode('utf-8')
+                row['checks']['macro_invocations_preserved']=all(token in main for token in [r'\sys{}',r'\eg',r'\ie',r'\etal',r'\loss',r'\wrt',r'\methodalias'])
+            row['checks']['delivered_source_recompiled']=manifest.get('archive_rebuild',{}).get('success') is True
+        if name=='macro_native_resume':row['checks']['validated_cache_reused']=manifest.get('translation',{}).get('cache_hits',0)>0
         if name=='complex_native' and (output/'chinese_source.zip').exists():
             with zipfile.ZipFile(output/'chinese_source.zip') as archive:
                 row['checks']['table_rows_byte_identical']=archive.read('sections/rows.tex')==(source/'sections/rows.tex').read_bytes()
@@ -139,5 +194,5 @@ def run(base,cases):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--workspace',required=True)
-    parser.add_argument('--cases',nargs='+',default=['complex_native','bbl_only','pdf_only','broken_native'])
+    parser.add_argument('--cases',nargs='+',default=['complex_native','bbl_only','pdf_only','broken_native','macro_native','macro_native_resume','archive_pdf'])
     args=parser.parse_args();sys.exit(0 if run(args.workspace,args.cases) else 2)
