@@ -1,4 +1,4 @@
-# Academic Paper Translate
+# Academic Paper Translate：面向科研阅读的论文全文翻译工作流
 
 [English](README_EN.md) · [Hermes 技能说明](SKILL.md) · [核验规范](AUDIT_SPEC.md)
 
@@ -6,9 +6,23 @@
 
 支持 arXiv 编号或链接、英文论文标题、本地 PDF 和 TeX 工程目录。翻译目标为简体中文，要求模型只输出译文，不生成摘要或论文导读。
 
+## 项目目标与工程重点
+
+面向英文论文阅读，把原文获取、正文翻译、结构保护、LaTeX 编译与双语 PDF 交付组织成可追踪的工作流。重点处理论文翻译中的公式与数值完整性、原文来源确认、失败降级和重复运行问题。
+
+| 工程方向 | 解决的问题 | 代码入口 |
+| --- | --- | --- |
+| 来源与任务编排 | 核对本地 PDF 与候选论文，组织原生翻译 / PDF 降级和结果清单 | [zotero_translate.py](scripts/zotero_translate.py) |
+| LaTeX 结构保护 | 区分可翻译文本与受保护内容，保留公式、引用键和完整数值 | [latex_syntax.py](scripts/latex_syntax.py) |
+| 模型适配 | 通过配置切换 CPA、DeepSeek、Ollama 等后端 | [adapters](adapters/) |
+| 可验证交付 | 回归检查、源码包重编译、安装后入口验证 | [tests](tests/)、[核验规范](AUDIT_SPEC.md) |
+
+**技术栈：** Python · PyMuPDF · LaTeX / XeLaTeX · LLM API · Hermes Skill · pdf2zh-next
+
 ## 工作方式
 
-- **源码优先**：在工作副本中提取受支持的正文、标题和 caption，冻结公式、表格正文、数值、引用键和代码，检查占位符是否完整恢复。
+- **来源核对**：本地 PDF 中的 arXiv 编号、引用或文件名仅作为候选；通过官方 PDF 的文件一致性或完整分页文本核对后才使用对应源码，未确认时保留传入的 PDF 进入降级流程。
+- **源码优先**：在工作副本中提取受支持的正文、标题和 caption，冻结公式、表格正文、数值（含负号、小数和科学计数法）、引用键和代码，检查占位符是否完整恢复。
 - **本地编译与核验**：采用 XeLaTeX，按需调用 BibTeX 或 Biber，检查引用及编译收敛；源码 ZIP 还会解压到新目录重新编译。
 - **明确降级**：找不到可用源码，或原生解析、翻译校验、编译失败时，尝试固定版本的 pdf2zh-next。没有有效原 PDF 时仍可能失败。
 - **双语 PDF**：原文在左、中文在右，按页码配对；页数不同时保留全部页面，并在缺页侧标注说明。
@@ -148,6 +162,7 @@ PYTHONIOENCODING=utf-8 "$PYTHON" -B "$SKILL_DIR/scripts/zotero_translate.py" \
 
 ## 已验证范围与限制
 
+- **当前源码：92 项确定性回归通过**，覆盖来源误匹配、完整数值保护及既有流程；Windows / Linux CI 同时检查回归、安装包私有文件排除和安装后入口。
 - **v2.1：86 项确定性回归通过；7 个 Hermes 端到端场景完成预期结果**，覆盖原生编译、PDF 降级、安全宏、预存原文、缓存续跑等。另通过 Hermes 验证了直接 CLI 入口。详见 [v2.1 报告](docs/v2.1.0-修复与Hermes复验报告.md)。
 - v2.0 还检查过 CVPR、NeurIPS、ICML、ACM 样式构造样本及多页排版。它们不是完整真实论文语料的逐句人工验收；历史 62 篇论文没有全量重跑。详见 [修复验收报告](docs/学术论文翻译Skill修复与验收报告.md)。
 - 中文重排可能改变换行、字体、浮动位置和页数。左右按页码配对不代表语义逐段对齐；不承诺“100% 原版式不变”。
@@ -167,7 +182,7 @@ python -B -m unittest discover -s tests -p 'test_*.py' -v
 python -B tests/run_acceptance.py --workspace "/absolute/path/to/new-acceptance-workspace"
 ~~~
 
-真实验收使用新的独立目录，并遵循 [AUDIT_SPEC.md](AUDIT_SPEC.md)。以上翻译测试数字指已记录的 v2.1 验收，不是持续集成状态徽章。v2.1.1 另外检查构建、安装后资源与命令行入口；CI 不调用真实翻译服务。
+真实验收使用新的独立目录，并遵循 [AUDIT_SPEC.md](AUDIT_SPEC.md)。当前源码回归与历史真实翻译验收分别列出。构建与安装检查覆盖包内资源和命令行入口；CI 不调用真实翻译服务。
 
 主要代码位于 scripts/（流程、语法保护、编译、PDF 降级）与 adapters/；提示词在 prompts/，测试在 tests/，历史报告在 docs/。companion-skills/ 中的下载技能可按需单独下载原文和源码；需要翻译时直接使用主入口。
 
@@ -176,7 +191,3 @@ python -B tests/run_acceptance.py --workspace "/absolute/path/to/new-acceptance-
 提示词参考 [Zotero PDF Translate](https://github.com/windingwind/zotero-pdf-translate)；PDF 降级使用 [PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next)。本项目不是这些项目的官方发行版。
 
 凭证与历史清理说明见 [SECURITY.md](SECURITY.md)。采用 [MIT License](LICENSE)。
-
-## Source identity and numeric integrity
-
-Local PDF identifiers are candidates only. Native source translation requires an identical official PDF or identical substantial extracted text on every page. Unavailable or unverified candidates fall back to the supplied PDF; the manifest records the decision. Signed decimals and scientific notation are protected as complete tokens. The regression suite covers foreign-paper citations, filename candidates, unavailable references, and dropped-sign translations.

@@ -1,4 +1,4 @@
-# Academic Paper Translate
+# Academic Paper Translate: a full-paper translation workflow for research reading
 
 [中文](README.md) · [Hermes skill instructions](SKILL.md) · [Audit requirements](AUDIT_SPEC.md)
 
@@ -6,9 +6,23 @@ A Hermes skill for translating English academic papers into Simplified Chinese. 
 
 Inputs include arXiv IDs or links, English paper titles, local PDFs, and TeX project directories. Prompts request complete translations without summaries or reading guides.
 
+## Project goals and engineering focus
+
+The project connects original-paper retrieval, translation, structural protection, LaTeX compilation, and bilingual PDF delivery in a traceable workflow. Its engineering focus is formula and numeric integrity, source identity, explicit failure handling, and repeatable execution.
+
+| Area | Purpose | Entry point |
+| --- | --- | --- |
+| Source identity and orchestration | Verifies local PDF candidates and coordinates native translation, fallback, and manifests | [zotero_translate.py](scripts/zotero_translate.py) |
+| LaTeX protection | Separates translatable prose from formulas, citation keys, and complete numeric tokens | [latex_syntax.py](scripts/latex_syntax.py) |
+| Provider adapters | Configures CPA, DeepSeek, and Ollama backends | [adapters](adapters/) |
+| Delivery checks | Regression tests, source archive recompilation, and installed CLI checks | [tests](tests/), [audit requirements](AUDIT_SPEC.md) |
+
+**Stack:** Python · PyMuPDF · LaTeX / XeLaTeX · LLM APIs · Hermes Skill · pdf2zh-next
+
 ## How it works
 
-- **Source first:** extracts supported prose, headings, and captions in a working copy; protects math, table bodies, numbers, citation keys, and code; validates restored placeholders.
+- **Source identity:** treats local PDF identifiers, citations, and filenames as candidates. Native source translation requires an identical official PDF or matching substantial text on every page; unverified candidates use the supplied PDF in the fallback workflow.
+- **Source first:** extracts supported prose, headings, and captions in a working copy; protects math, table bodies, complete numeric tokens (including signs, decimals, and scientific notation), citation keys, and code; validates restored placeholders.
 - **Local compilation:** runs XeLaTeX, with BibTeX or Biber when needed, and checks references and convergence. The delivered source ZIP is extracted and compiled again in a fresh directory.
 - **Explicit fallback:** attempts pinned pdf2zh-next when source retrieval, native parsing, translation validation, or compilation fails. The overall job can still fail, including when no valid original PDF is available.
 - **Bilingual PDF:** places original pages on the left and Chinese pages on the right, paired by page number. Unequal page counts retain all pages, with a notice on the missing side.
@@ -148,6 +162,7 @@ Read **translation_manifest.json** in the output directory. The existence of a P
 
 ## Validation and limits
 
+- **Current source: 92 deterministic regression tests passed**, including source identity and complete numeric token protection. Windows / Linux CI also checks packaging exclusions for private files and the installed entry point.
 - **v2.1: 86 deterministic regression tests passed; 7 Hermes end-to-end scenarios reached their expected outcomes**, covering native compilation, PDF fallback, safe macros, existing originals, and cached reruns. A direct CLI invocation was also verified through Hermes. See the [v2.1 report](docs/v2.1.0-修复与Hermes复验报告.md).
 - v2.0 additionally checked constructed fixtures using CVPR, NeurIPS, ICML, and ACM styles, plus multi-page layouts. These were not full published papers reviewed sentence by sentence. The historical 62-paper collection was not rerun in full. See the [acceptance report](docs/学术论文翻译Skill修复与验收报告.md).
 - Chinese text can change line breaks, fonts, float placement, and page counts. Pairing by page number is not semantic paragraph alignment. Identical layout is not guaranteed.
@@ -168,7 +183,7 @@ python -B -m unittest discover -s tests -p 'test_*.py' -v
 python -B tests/run_acceptance.py --workspace "/absolute/path/to/new-acceptance-workspace"
 ~~~
 
-Use a new, isolated acceptance workspace and follow [AUDIT_SPEC.md](AUDIT_SPEC.md). Translation counts above refer to recorded v2.1 validation, not a continuous integration badge. v2.1.1 additionally checks builds, installed resources and CLI entry points. CI does not call live translation services.
+Use a new, isolated acceptance workspace and follow [AUDIT_SPEC.md](AUDIT_SPEC.md). Current source regression results and historical live translation validation are listed separately. Build and installation checks cover packaged resources and CLI entry points. CI does not call live translation services.
 
 scripts/ contains orchestration, syntax protection, compilation, and PDF fallback; providers are in adapters/, prompts in prompts/, tests in tests/, and historical reports in docs/. The companion-skills/ downloader can retrieve originals and sources separately; use the main entry point when translation is requested.
 
@@ -177,7 +192,3 @@ scripts/ contains orchestration, syntax protection, compilation, and PDF fallbac
 Prompts draw on [Zotero PDF Translate](https://github.com/windingwind/zotero-pdf-translate). PDF fallback uses [PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next). This project is not an official distribution of either project.
 
 See [SECURITY.md](SECURITY.md) for credential and history cleanup guidance. Licensed under the [MIT License](LICENSE).
-
-## Source identity and numeric integrity
-
-Local PDF identifiers are candidates only. Native source translation requires an identical official PDF or identical substantial extracted text on every page. Unavailable or unverified candidates fall back to the supplied PDF; the manifest records the decision. Signed decimals and scientific notation are protected as complete tokens. The regression suite covers foreign-paper citations, filename candidates, unavailable references, and dropped-sign translations.
