@@ -177,3 +177,7 @@ scripts/ contains orchestration, syntax protection, compilation, and PDF fallbac
 Prompts draw on [Zotero PDF Translate](https://github.com/windingwind/zotero-pdf-translate). PDF fallback uses [PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next). This project is not an official distribution of either project.
 
 See [SECURITY.md](SECURITY.md) for credential and history cleanup guidance. Licensed under the [MIT License](LICENSE).
+
+## Source identity and numeric integrity
+
+Local PDF identifiers are candidates only. Native source translation requires an identical official PDF or identical substantial extracted text on every page. Unavailable or unverified candidates fall back to the supplied PDF; the manifest records the decision. Signed decimals and scientific notation are protected as complete tokens. The regression suite covers foreign-paper citations, filename candidates, unavailable references, and dropped-sign translations.

@@ -103,6 +103,26 @@ def download_arxiv_pdf(arxiv_id,target_pdf_path):
         print('Original PDF unavailable:',type(e).__name__);return False
 
 
+def verify_arxiv_pdf_identity(local_pdf, arxiv_id, reference_pdf):
+    """A citation or filename is only a candidate, never proof of identity.
+
+    Require an identical file, or identical substantial text on every page of
+    the official PDF. Unavailable, scanned or differently typeset PDFs safely
+    use the existing PDF fallback instead of substituting unverified sources.
+    """
+    import pymupdf
+    if not download_arxiv_pdf(arxiv_id, reference_pdf):
+        return False
+    if sha256(local_pdf) == sha256(reference_pdf):
+        return True
+    with pymupdf.open(str(local_pdf)) as local, pymupdf.open(str(reference_pdf)) as reference:
+        if len(local) != len(reference):
+            return False
+        local_pages = [re.sub(r'\s+', '', page.get_text()) for page in local]
+        reference_pages = [re.sub(r'\s+', '', page.get_text()) for page in reference]
+        return sum(map(len, local_pages)) >= 200 and local_pages == reference_pages
+
+
 def fetch_arxiv_source(arxiv_id,target_dir):
     target=Path(target_dir);target.mkdir(parents=True,exist_ok=True)
     archive=target.parent/(target.name+'.download.gz')
@@ -293,6 +313,18 @@ def _auto_translate_paper(input_target,output_dir=None,provider='cpa',max_worker
             m=ARXIV_RE.search(input_target)
             arxiv_id=m.group(1) if m else search_arxiv_by_title(input_target)
             if not arxiv_id:raise ValueError('No confident arXiv match for input')
+        if arxiv_id and target.is_file() and target.suffix.lower()=='.pdf':
+            candidate = arxiv_id
+            try:
+                verified = verify_arxiv_pdf_identity(target, candidate, run/'candidate-original.pdf')
+            except Exception as e:
+                verified = False
+                manifest['warnings'].append('Source identity check failed: '+type(e).__name__)
+            manifest['source_identity'] = {'candidate_arxiv_id': candidate,
+                'verified': verified, 'method': 'official_pdf_file_or_full_page_text_match'}
+            if not verified:
+                arxiv_id = None
+                manifest['warnings'].append('Unverified arXiv candidate rejected; translating the supplied PDF.')
         if arxiv_id:
             manifest['arxiv_id']=arxiv_id
             if not originals.exists() and download_arxiv_pdf(arxiv_id,originals):manifest['original_provenance']='arxiv_pdf'

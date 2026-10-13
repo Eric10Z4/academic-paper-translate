@@ -253,7 +253,7 @@ class RoutingTests(Case):
         path=self.root/'2301.12345.pdf';make_pdf(path)
         def fallback(pdf,out,**kwargs):
             make_pdf(Path(out)/'chinese_mono.pdf',chinese=True);lc.make_side_by_side_dual_pdf(pdf,Path(out)/'chinese_mono.pdf',Path(out)/'bilingual_dual.pdf');return True
-        with patch.object(z,'find_arxiv_id_from_pdf',return_value=None),patch.object(z,'fetch_arxiv_source',return_value=False),patch.object(pr,'run_pdf_translation',side_effect=fallback) as fb:
+        with patch.object(z,'find_arxiv_id_from_pdf',return_value=None),patch.object(z,'verify_arxiv_pdf_identity',return_value=False),patch.object(z,'fetch_arxiv_source',return_value=False),patch.object(pr,'run_pdf_translation',side_effect=fallback) as fb:
             ok=z.auto_translate_paper(str(path),self.root/'out',config={})
         self.assertTrue(ok);fb.assert_called_once()
     def test_translation_exception_enters_fallback_and_input_unchanged(self):

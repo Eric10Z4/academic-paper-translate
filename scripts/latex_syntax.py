@@ -259,6 +259,10 @@ def mask_latex_tokens(text):
     return ''.join(chunks), mapping
 
 
+# Keep signs and exponent syntax in the same opaque atom as the mantissa.
+NUMBER_RE = re.compile(r'[+\-−]?(?:\d+(?:[.,]\d+)*|[.,]\d+)(?:[eE][+\-−]?\d+)?')
+
+
 @dataclass
 class Segment:
     path: Path
@@ -468,11 +472,11 @@ class ProjectPlan:
             if not enabled:
                 flush();i+=1;continue
             if c in '{}~&#^_':emit(i,i+1);i+=1;continue
-            if c.isdigit():
-                m=re.match(r'\d+(?:[.,]\d+)*',text[i:stop]);end=i+len(m.group())
-                emit(i,end);i=end;continue
+            number=NUMBER_RE.match(text,i,stop)
+            if number:
+                end=number.end();emit(i,end);i=end;continue
             end=i+1
-            while end<stop and text[end] not in '\\%${}~&#^_' and not text[end].isdigit():end+=1
+            while end<stop and text[end] not in '\\%${}~&#^_' and not NUMBER_RE.match(text,end,stop):end+=1
             chunk=text[i:end]
             # Blank lines and sentence boundaries bound request size while
             # environment state remains global and independent of paragraphs.

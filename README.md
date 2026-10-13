@@ -176,3 +176,7 @@ python -B tests/run_acceptance.py --workspace "/absolute/path/to/new-acceptance-
 提示词参考 [Zotero PDF Translate](https://github.com/windingwind/zotero-pdf-translate)；PDF 降级使用 [PDFMathTranslate-next](https://github.com/PDFMathTranslate-next/PDFMathTranslate-next)。本项目不是这些项目的官方发行版。
 
 凭证与历史清理说明见 [SECURITY.md](SECURITY.md)。采用 [MIT License](LICENSE)。
+
+## Source identity and numeric integrity
+
+Local PDF identifiers are candidates only. Native source translation requires an identical official PDF or identical substantial extracted text on every page. Unavailable or unverified candidates fall back to the supplied PDF; the manifest records the decision. Signed decimals and scientific notation are protected as complete tokens. The regression suite covers foreign-paper citations, filename candidates, unavailable references, and dropped-sign translations.
