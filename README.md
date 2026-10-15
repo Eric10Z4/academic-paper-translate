@@ -2,7 +2,7 @@
 
 [English](README_EN.md) · [Hermes 技能说明](SKILL.md) · [核验规范](AUDIT_SPEC.md)
 
-面向 Hermes 的英文学术论文全文翻译技能。当前代码版本为 **2.1.1**：优先翻译 LaTeX 源码并在本地编译中文 PDF；原生流程不可用时尝试 PDF 翻译，并在结果记录中明确标注降级。
+面向 Hermes 的英文学术论文全文翻译技能。当前代码版本为 **2.2.0**：优先翻译 LaTeX 源码并在本地编译中文 PDF；原生流程不可用时尝试 PDF 翻译，并强制进入待视觉核验状态；核验通过后执行收尾，默认不保留生成的源码包。
 
 支持 arXiv 编号或链接、英文论文标题、本地 PDF 和 TeX 工程目录。翻译目标为简体中文，要求模型只输出译文，不生成摘要或论文导读。
 
@@ -26,7 +26,7 @@
 - **本地编译与核验**：采用 XeLaTeX，按需调用 BibTeX 或 Biber，检查引用及编译收敛；源码 ZIP 还会解压到新目录重新编译。
 - **明确降级**：找不到可用源码，或原生解析、翻译校验、编译失败时，尝试固定版本的 pdf2zh-next。没有有效原 PDF 时仍可能失败。
 - **双语 PDF**：原文在左、中文在右，按页码配对；页数不同时保留全部页面，并在缺页侧标注说明。
-- **可追踪运行**：保留清单、工作副本、日志和已验证译文缓存。相同输入可续跑；原始 TeX 工程不被修改。
+- **核验后收尾**：Hermes 查看全部中文页面并放大对照公式、分数和算法；核验记录绑定当前三 PDF 散列。通过后删除本次工作副本和已登记源码包，保留 PDF、清单、诊断记录及译文缓存。原工程不被修改。
 
 解析器不是完整的 TeX AST 或宏展开器。它只支持部分已知结构；未知或无法证明安全的结构会导致原生分支失败或降级。源码保护也不等于所有真实论文的语义和排版均已获得保证。
 
@@ -38,7 +38,7 @@
 
 1. 专用 Python 环境，安装 [requirements.txt](requirements.txt) 中的 PyMuPDF。
 2. XeLaTeX、论文需要的宏包和字体，以及按需使用的 BibTeX / Biber。Windows 编译流程使用宋体、黑体、楷体、仿宋等字体。
-3. PATH 中可执行的 uv，用于运行 PDF 降级。程序通过隔离环境启动 **pdf2zh-next 2.9.0** 并约束 bitstring<5.0.0；首次运行可能需要下载依赖和模型资源。
+3. PATH 中可执行的 uv，用于运行 PDF 降级。程序通过隔离环境启动 **pdf2zh-next 2.9.0 / BabelDOC 0.6.2** 并约束 bitstring<5.0.0；首次运行可能需要下载依赖和模型资源。
 4. 可用的翻译服务地址、模型和凭证。
 
 ~~~bash
@@ -125,6 +125,8 @@ python -B scripts/zotero_translate.py \
 | --workers 1..16 | 并发数量，默认 4 |
 | --compile-timeout 180 | 单次编译子进程时限，单位秒，不是整个流程总时限 |
 | --prompt cs_ai_specialized | 原生正文提示词；另有 zotero_default、math_formula_preservation。PDF 降级使用独立提示词 |
+| --finalize DIR --visual-review JSON | 根据真实视觉核验记录执行收尾；与输入参数互斥 |
+| --keep-source | 收尾时保留已登记的源码 ZIP，默认移除 |
 | --help | 查看完整参数 |
 
 --arxiv、--dir、--pdf 仍可作为输入别名，但一次只能选一个输入参数。旧 --output-zip 已删除，统一使用 --output-dir。
@@ -153,21 +155,30 @@ PYTHONIOENCODING=utf-8 "$PYTHON" -B "$SKILL_DIR/scripts/zotero_translate.py" \
 
 | 状态 | 交付物与含义 |
 | --- | --- |
-| complete_native | original.pdf、chinese_mono.pdf、bilingual_dual.pdf、chinese_source.zip；通过原生流程检查及 ZIP 解压重编译 |
-| complete_fallback | 三份标准 PDF；若产生未完成源码包，另附 chinese_source_uncompiled.zip。必须说明采用 PDF 降级 |
-| review_required | 文件已生成，但有排版或字体警告，需要检查；CLI 返回非零 |
+| complete_native | 原生程序检查及 ZIP 重编译通过；仍须检查 visual_review 与 cleanup，完成视觉检查和收尾后交付三 PDF |
+| complete_fallback | PDF 降级产物已经通过绑定当前 PDF 的视觉核验并完成收尾；交付三 PDF，说明源码级保证不适用 |
+| review_required | 所有 PDF 降级，以及有排版/字体警告的原生结果；文件已生成但未完成验收，CLI 返回非零 |
 | failed | 本次失败；查看清单中的阶段和日志，不把旧产物当作本次成功结果 |
 
-.translation/ 保存工作副本和缓存。每篇论文使用独立输出目录；分享前检查日志及清单中的本机路径和论文内容。未编译源码包可能仍是原文或只完成部分处理，不代表完整中文源码。
+先渲染查看全部中文页，并按内容对照英文中的公式和算法。根据 [视觉核验格式](references/visual_review.md) 记录实际观察，随后运行：
+
+~~~bash
+python -B scripts/zotero_translate.py --finalize "./output/paper" --visual-review "./review.json"
+~~~
+
+成功交付要求 `visual_review.status=passed` 且 `cleanup.status=complete`。默认移除本次运行目录及散列匹配的已登记源码 ZIP；用户需要源码时加 `--keep-source`。失败或未检查时保留诊断现场，不删除原始输入、笔记或未知文件。旧失败运行不做无差别清理。每篇论文使用独立输出目录。
 
 ## 已验证范围与限制
 
-- **当前源码：92 项确定性回归通过**，覆盖来源误匹配、完整数值保护及既有流程；Windows / Linux CI 同时检查回归、安装包私有文件排除和安装后入口。
+- **v2.2：本机 153 项回归，150 项通过、3 项因 Windows 链接权限跳过。** Hermes 真实完成行内分数小样例与 SCORE 全文原生复验；SCORE 246 个片段校验通过、三份 PDF 均为 13 页、源码 ZIP 重编译及逐页视觉核验通过。小样例和 SCORE 均完成收尾。详见 [v2.2 记录](docs/v2.2.0-formula-validation.md)。
+
+- v2.1.1 后续修复记录为 92 项确定性回归通过，覆盖来源误匹配和完整数值保护；这些检查继续保留在当前测试集中。
 - **v2.1：86 项确定性回归通过；7 个 Hermes 端到端场景完成预期结果**，覆盖原生编译、PDF 降级、安全宏、预存原文、缓存续跑等。另通过 Hermes 验证了直接 CLI 入口。详见 [v2.1 报告](docs/v2.1.0-修复与Hermes复验报告.md)。
 - v2.0 还检查过 CVPR、NeurIPS、ICML、ACM 样式构造样本及多页排版。它们不是完整真实论文语料的逐句人工验收；历史 62 篇论文没有全量重跑。详见 [修复验收报告](docs/学术论文翻译Skill修复与验收报告.md)。
 - 中文重排可能改变换行、字体、浮动位置和页数。左右按页码配对不代表语义逐段对齐；不承诺“100% 原版式不变”。
 - 自定义宏仅按受支持规则检查；长文本藏在冻结宏中不会被翻译。任意 .sty/.cls、动态 TeX 或未知结构不保证支持。
-- PDF 降级关闭表格文字翻译并启用图表保护，但依赖版面识别，不能提供 TeX 源码级冻结保证。
+- **纯 PDF 公式错排尚未通用解决。** 真实 PDF-only 样例仍出现分数拆散与算法合并，必须保留待核验状态。保留线条和风险页提示不能证明公式完整，也不能代替查看全部页面。
+- 正常 `looseness` 整数赋值、受支持的重音与会议模板命令不再误拒；未知动态语法仍保守处理。算法主体按原文冻结，只翻译标题。网络错误、下载到无法识别的响应和主文件歧义均不等于论文没有源码。
 - 双语合成尝试迁移普通网页链接、文档内跳转和目录，不保证所有 PDF 注释、动作和书签属性完整保留。
 - 源码 ZIP 在当前环境重编译通过，不代表在所有电脑或 Overleaf 上开箱即用；TeX 发行版、宏包和系统字体未打包。
 - 自动检查无法证明每句译文准确、无遗漏或整篇术语完全一致。正式引用或研究使用前仍需核对关键内容。
@@ -182,7 +193,7 @@ python -B -m unittest discover -s tests -p 'test_*.py' -v
 python -B tests/run_acceptance.py --workspace "/absolute/path/to/new-acceptance-workspace"
 ~~~
 
-真实验收使用新的独立目录，并遵循 [AUDIT_SPEC.md](AUDIT_SPEC.md)。当前源码回归与历史真实翻译验收分别列出。构建与安装检查覆盖包内资源和命令行入口；CI 不调用真实翻译服务。
+真实验收使用新的独立目录，并遵循 [AUDIT_SPEC.md](AUDIT_SPEC.md)。以上真实翻译数字对应各版本的已记录验收；v2.2 的程序测试通过不代表 PDF-only 排版通过。CI 运行确定性回归、构建和安装后入口检查，不调用真实翻译服务。
 
 主要代码位于 scripts/（流程、语法保护、编译、PDF 降级）与 adapters/；提示词在 prompts/，测试在 tests/，历史报告在 docs/。companion-skills/ 中的下载技能可按需单独下载原文和源码；需要翻译时直接使用主入口。
 

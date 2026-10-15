@@ -25,6 +25,8 @@ for path in (wheel, sdist):
         assert (b'PACKAGING_PRIVATE_' + b'SENTINEL') not in content, name
     assert any(n.endswith('/prompts/zotero_default.txt') for n in files)
     assert any(n.endswith('/VERSION') for n in files)
+    assert any(n.endswith('/references/visual_review.md') for n in files)
+    assert any(n.endswith('/scripts/delivery.py') for n in files)
     if path.suffix == '.whl':
         metadata, = [v for n,v in files.items() if n.endswith('.dist-info/METADATA')]
         message = email.message_from_bytes(metadata)

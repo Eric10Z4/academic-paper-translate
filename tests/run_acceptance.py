@@ -161,7 +161,9 @@ def run(base,cases):
         ok=z.auto_translate_paper(str(source),str(output),max_workers=2,no_fallback=native)
         manifest=json.loads((output/'translation_manifest.json').read_text(encoding='utf-8'))
         row={'name':name,'returned_success':ok,'status':manifest['status'],'mode':manifest.get('mode'),'input_unchanged':before==snapshot(source),'manifest':str(output/'translation_manifest.json'),'checks':{}}
-        row['checks']['complete_expected_mode']=manifest['status']==('complete_native' if native else 'complete_fallback')
+        row['checks']['expected_gate']=manifest['status']==('complete_native' if native else 'review_required')
+        row['checks']['expected_mode']=manifest.get('mode')==('latex_native' if native else 'pdf_fallback')
+        row['checks']['fallback_not_falsely_approved']=bool(ok) if native else not ok
         row['checks']['original_preserved']=row['input_unchanged']
         if original_stat:
             row['checks']['preexisting_original_bytes_and_mtime_unchanged']=original_stat==(sha256(existing),existing.stat().st_mtime_ns)
@@ -186,7 +188,7 @@ def run(base,cases):
             with zipfile.ZipFile(output/'chinese_source.zip') as archive:
                 row['checks']['bbl_byte_identical']=archive.read('main.bbl')==(source/'main.bbl').read_bytes()
         if name=='broken_native':row['checks']['uncompiled_source_retained']=(output/'chinese_source_uncompiled.zip').exists()
-        row['passed']=bool(ok and all(row['checks'].values()))
+        row['passed']=bool(all(row['checks'].values()))
         result['cases'].append(row);atomic_json(base/'acceptance_results.json',result)
         print(json.dumps(row,ensure_ascii=False),flush=True)
     return all(r['passed'] for r in result['cases'])

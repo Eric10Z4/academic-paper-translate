@@ -52,11 +52,11 @@ class SourceIdentityTests(Case):
             shutil.copy2(official,target)
             return True
         with patch.object(z,'download_arxiv_pdf',side_effect=download), patch.object(z,'fetch_arxiv_source') as source, patch.object(pr,'run_pdf_translation',side_effect=self.fallback):
-            self.assertTrue(z.auto_translate_paper(str(local),self.root/'out',config={}))
+            self.assertFalse(z.auto_translate_paper(str(local),self.root/'out',config={}))
             source.assert_not_called()
         manifest=json.loads((self.root/'out/translation_manifest.json').read_text(encoding='utf-8'))
         self.assertFalse(manifest['source_identity']['verified'])
-        self.assertEqual(manifest['status'],'complete_fallback')
+        self.assertEqual(manifest['status'],'review_required')
         self.assertEqual(local.read_bytes(),before)
 
     def test_identical_official_pdf_is_accepted(self):
@@ -82,5 +82,8 @@ class SourceIdentityTests(Case):
     def test_filename_candidate_cannot_bypass_identity_check(self):
         local=self.root/'1706.03762.pdf';make_pdf(local)
         with patch.object(z,'verify_arxiv_pdf_identity',return_value=False) as verify, patch.object(z,'fetch_arxiv_source') as source, patch.object(pr,'run_pdf_translation',side_effect=self.fallback):
-            self.assertTrue(z.auto_translate_paper(str(local),self.root/'out',config={}))
+            self.assertFalse(z.auto_translate_paper(str(local),self.root/'out',config={}))
             verify.assert_called_once();source.assert_not_called()
+        manifest=json.loads((self.root/'out/translation_manifest.json').read_text(encoding='utf-8'))
+        self.assertEqual(manifest['status'],'review_required')
+        self.assertEqual(manifest['mode'],'pdf_fallback')

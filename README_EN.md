@@ -2,7 +2,7 @@
 
 [中文](README.md) · [Hermes skill instructions](SKILL.md) · [Audit requirements](AUDIT_SPEC.md)
 
-A Hermes skill for translating English academic papers into Simplified Chinese. Code version **2.1.1** prefers LaTeX source translation with local PDF compilation. When the native workflow is unavailable, it attempts PDF translation and records the fallback explicitly.
+A Hermes skill for translating English academic papers into Simplified Chinese. Code version **2.2.0** prefers LaTeX source translation with local PDF compilation. When the native workflow is unavailable, it attempts PDF translation and requires visual review. After review passes, finalization removes generated sources and archives by default.
 
 Inputs include arXiv IDs or links, English paper titles, local PDFs, and TeX project directories. Prompts request complete translations without summaries or reading guides.
 
@@ -26,7 +26,7 @@ The project connects original-paper retrieval, translation, structural protectio
 - **Local compilation:** runs XeLaTeX, with BibTeX or Biber when needed, and checks references and convergence. The delivered source ZIP is extracted and compiled again in a fresh directory.
 - **Explicit fallback:** attempts pinned pdf2zh-next when source retrieval, native parsing, translation validation, or compilation fails. The overall job can still fail, including when no valid original PDF is available.
 - **Bilingual PDF:** places original pages on the left and Chinese pages on the right, paired by page number. Unequal page counts retain all pages, with a notice on the missing side.
-- **Traceable runs:** retains a manifest, working copies, logs, and validated translation caches. The same input can resume; the original TeX project is not modified.
+- **Reviewed delivery and cleanup:** Hermes inspects every Chinese page and compares formulas, fractions, and algorithms against the original. A review bound to all three PDF hashes enables removal of the current working copy and tracked archives, retaining PDFs, manifests, diagnostics, and translation caches. Original inputs remain unchanged.
 
 The parser is not a complete TeX AST or macro expansion engine. It supports a limited set of structures; unsupported structures fail the native branch or trigger fallback. Source protection does not guarantee translation accuracy or identical layout for every paper.
 
@@ -38,7 +38,7 @@ Prepare:
 
 1. A dedicated Python environment with PyMuPDF from [requirements.txt](requirements.txt).
 2. XeLaTeX, the paper's packages and fonts, and BibTeX / Biber as needed. The Windows workflow uses fonts including SimSun, SimHei, KaiTi, and FangSong.
-3. uv on PATH for PDF fallback. The script launches **pdf2zh-next 2.9.0** in an isolated environment with bitstring<5.0.0. First use may download dependencies and model resources.
+3. uv on PATH for PDF fallback. The script launches **pdf2zh-next 2.9.0 / BabelDOC 0.6.2** in an isolated environment with bitstring<5.0.0. First use may download dependencies and model resources.
 4. A working translation endpoint, model, and credentials.
 
 ~~~bash
@@ -125,6 +125,8 @@ In-place PDF archiving requires an existing original.pdf to match the explicitly
 | --workers 1..16 | Concurrency; default 4 |
 | --compile-timeout 180 | Timeout in seconds per compilation subprocess, not for the whole workflow |
 | --prompt cs_ai_specialized | Native prose prompt; alternatives are zotero_default and math_formula_preservation. PDF fallback uses a separate prompt |
+| --finalize DIR --visual-review JSON | Finalize a delivery using a real visual review; mutually exclusive with input arguments |
+| --keep-source | Retain tracked source archives during finalization; removed by default |
 | --help | List all options |
 
 --arxiv, --dir, and --pdf remain input aliases; choose only one input option. The old --output-zip option has been removed. Use --output-dir.
@@ -153,21 +155,30 @@ Read **translation_manifest.json** in the output directory. The existence of a P
 
 | Status | Meaning and artifacts |
 | --- | --- |
-| complete_native | original.pdf, chinese_mono.pdf, bilingual_dual.pdf, and chinese_source.zip; native checks and extracted ZIP recompilation passed |
-| complete_fallback | The three standard PDFs, plus chinese_source_uncompiled.zip if an unfinished source archive was produced. Disclose PDF fallback |
-| review_required | Artifacts exist, but layout or font warnings require inspection; the CLI returns a nonzero status |
+| complete_native | Native programmatic checks and archive rebuild passed; inspect visual_review and cleanup and finish review/finalization before delivery |
+| complete_fallback | The three PDFs passed a review bound to their current hashes and finalization completed; disclose PDF fallback and its limits |
+| review_required | All PDF fallback results, plus native results with layout/font warnings; artifacts exist but acceptance is pending and the CLI returns nonzero |
 | failed | Inspect the recorded stage and logs. Do not present older artifacts as this run's output |
 
-.translation/ stores working copies and caches. Use a separate output directory per paper. Review logs and manifests for local paths and paper content before sharing. An uncompiled archive may contain original or partially processed source and is not proof of complete Chinese source.
+Render and inspect every Chinese page, comparing formulas and algorithms by content rather than page number. Record actual observations using the [visual review schema](references/visual_review.md), then run:
+
+~~~bash
+python -B scripts/zotero_translate.py --finalize "./output/paper" --visual-review "./review.json"
+~~~
+
+Successful delivery requires `visual_review.status=passed` and `cleanup.status=complete`. By default, finalization removes the current run and hash-matched tracked source archives. Use `--keep-source` when source archives are requested. Failed or unreviewed runs retain diagnostics; original inputs, notes, unknown files, and older failed runs are not indiscriminately deleted. Use a separate output directory per paper.
 
 ## Validation and limits
 
-- **Current source: 92 deterministic regression tests passed**, including source identity and complete numeric token protection. Windows / Linux CI also checks packaging exclusions for private files and the installed entry point.
+- **v2.2: 153 local regression tests, 150 passed and 3 skipped for Windows link privileges.** Real Hermes validation covered a fraction fixture and the full SCORE paper: 246 validated segments, three 13-page PDFs, archive rebuild, and inspection of every Chinese page. Both native deliveries completed cleanup. See the [v2.2 validation record](docs/v2.2.0-formula-validation.md).
+
+- The fixes following v2.1.1 recorded 92 passing deterministic tests, including source identity and complete numeric token protection. Those checks remain in the current suite.
 - **v2.1: 86 deterministic regression tests passed; 7 Hermes end-to-end scenarios reached their expected outcomes**, covering native compilation, PDF fallback, safe macros, existing originals, and cached reruns. A direct CLI invocation was also verified through Hermes. See the [v2.1 report](docs/v2.1.0-修复与Hermes复验报告.md).
 - v2.0 additionally checked constructed fixtures using CVPR, NeurIPS, ICML, and ACM styles, plus multi-page layouts. These were not full published papers reviewed sentence by sentence. The historical 62-paper collection was not rerun in full. See the [acceptance report](docs/学术论文翻译Skill修复与验收报告.md).
 - Chinese text can change line breaks, fonts, float placement, and page counts. Pairing by page number is not semantic paragraph alignment. Identical layout is not guaranteed.
 - Custom macros are checked only under supported rules. Long prose inside frozen macros remains untranslated. Arbitrary .sty/.cls definitions, dynamic TeX, and unknown structures are not guaranteed to work.
-- PDF fallback disables table-text translation and enables figure/table protection, but layout recognition cannot provide TeX source-level integrity guarantees.
+- **PDF-only formula reconstruction is not generally solved.** The live PDF-only fixture still split fractions and merged algorithm lines and must remain pending review. Stroke retention and heuristic risk-page hints do not prove formula fidelity or replace full-page inspection.
+- Supported `looseness` integer assignments, accents, and conference metadata commands no longer force unnecessary fallback. Unknown dynamic syntax remains conservative. Algorithm bodies stay in the original language; only captions are translated. Network failures, unrecognized responses, and ambiguous entry files are not evidence that a paper lacks source.
 - Bilingual composition attempts to transfer ordinary web links, internal jumps, and an outline. It does not guarantee every PDF annotation, action, or bookmark property.
 - ZIP recompilation succeeds in the current environment; it does not establish universal portability or one-click Overleaf compatibility. TeX distributions, packages, and system fonts are not bundled.
 - Automated checks cannot prove every sentence is accurate, complete, or terminologically consistent. Check critical passages before citing or relying on the translation.
@@ -183,7 +194,7 @@ python -B -m unittest discover -s tests -p 'test_*.py' -v
 python -B tests/run_acceptance.py --workspace "/absolute/path/to/new-acceptance-workspace"
 ~~~
 
-Use a new, isolated acceptance workspace and follow [AUDIT_SPEC.md](AUDIT_SPEC.md). Current source regression results and historical live translation validation are listed separately. Build and installation checks cover packaged resources and CLI entry points. CI does not call live translation services.
+Use a new, isolated acceptance workspace and follow [AUDIT_SPEC.md](AUDIT_SPEC.md). Live translation counts refer to each version’s recorded validation. A passing PDF-only workflow test does not mean visual quality passed. CI covers deterministic regressions, builds, and installed CLI checks without calling live translation services.
 
 scripts/ contains orchestration, syntax protection, compilation, and PDF fallback; providers are in adapters/, prompts in prompts/, tests in tests/, and historical reports in docs/. The companion-skills/ downloader can retrieve originals and sources separately; use the main entry point when translation is requested.
 

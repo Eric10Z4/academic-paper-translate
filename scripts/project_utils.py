@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 IGNORE_DIRS={'.git','.venv','venv','__pycache__','.translation','.build','node_modules'}
@@ -14,9 +15,15 @@ def sha256(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 def atomic_json(path,value):
     path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
-    tmp=path.with_name(path.name+'.tmp')
-    tmp.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
-    os.replace(tmp,path)
+    # Exclusive random temporary paths cannot follow an attacker/stale symlink.
+    fd,name=tempfile.mkstemp(prefix=path.name+'.',suffix='.tmp',dir=path.parent)
+    tmp=Path(name)
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as f:
+            json.dump(value,f,ensure_ascii=False,indent=2)
+        os.replace(tmp,path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def read_utf8(path):return Path(path).read_bytes().decode('utf-8')

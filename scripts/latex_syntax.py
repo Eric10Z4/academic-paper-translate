@@ -19,20 +19,27 @@ TABLE_ENVS = set('table table* tabular tabular* tabularx tabulary longtable supe
 TABLE_ENVS.update('sidewaystable sidewaystable* threeparttable threeparttablex longtable*'.split())
 MATH_ENVS = set('equation equation* align align* alignat alignat* gather gather* multline multline* eqnarray eqnarray* displaymath math flalign flalign* split cases matrix pmatrix bmatrix smallmatrix'.split())
 MATH_ENVS.update('aligned alignedat array subequations dmath dmath*'.split())
-CODE_ENVS = set('verbatim Verbatim lstlisting minted algorithm algorithm* algorithmic algorithmicx algorithm2e'.split())
+ALGORITHM_ENVS = set('algorithm algorithm* algorithmic algorithmicx algorithm2e'.split())
+CODE_ENVS = set('verbatim Verbatim lstlisting minted'.split()) | ALGORITHM_ENVS
 CODE_ENVS.update('verbatim* BVerbatim SaveVerbatim filecontents filecontents*'.split())
 FIGURE_ENVS={'figure','figure*','wrapfigure','sidewaysfigure','sidewaysfigure*','teaserfigure'}
 FROZEN_ENVS = TABLE_ENVS | MATH_ENVS | CODE_ENVS | FIGURE_ENVS | {'thebibliography', 'tikzpicture'}
 PROSE_ENVS=set('document abstract itemize enumerate description theorem lemma proof proposition corollary definition remark example solution quotation quote center flushleft flushright minipage strip adjustwidth multicols landscape samepage acknowledgments acknowledgements ack appendix appendices icmlauthorlist subfigure subtable theorem* proof* lemma* assumption fact observation notation claim property'.split())
+PROSE_ENVS.update({'keywords','acks'})
 TEXT_ARGS = {x: {0} for x in 'title subtitle section subsection subsubsection paragraph subparagraph chapter part caption footnote footnotetext thanks textbf textit textsl textsc textrm textsf texttt textnormal emph underline mbox MakeUppercase MakeLowercase subfloat'.split()}
 TEXT_ARGS.update({'href': {1}, 'textcolor': {1}, 'colorbox': {1}, 'fcolorbox': {2}, 'captionof': {1}, 'foreignlanguage': {1}, 'texorpdfstring': {0, 1}})
 TEXT_OPTIONALS = {'title', 'section', 'subsection', 'subsubsection', 'chapter', 'part', 'caption', 'captionof'}
-TEXT_ARGS.update({'icmltitle':{0},'icmltitlerunning':{0},'keywords':{0}})
+TEXT_ARGS.update({'icmltitle':{0},'icmltitlerunning':{0},'keywords':{0},'icmlkeywords':{0}})
+TEXT_ARGS.update({'acks':{0},'aistatstitle':{0},'runningtitle':{0}})
+# amsmath's \text is a fixed-argument \mbox outside math mode. Inside math it
+# remains part of the surrounding opaque formula, never a translatable span.
+TEXT_ARGS['text'] = {0}
 OPAQUE = set('label ref eqref pageref autoref vref cref Cref nameref url path includegraphics input include bibliography bibliographystyle addbibresource printbibliography documentclass usepackage RequirePackage author date institute affiliation email address keywords hypersetup geometry setlength addtolength setcounter addtocounter newcommand renewcommand providecommand DeclareRobustCommand newenvironment renewenvironment def gdef edef xdef let newtheorem theoremstyle definecolor color vspace hspace rule cline cmidrule multicolumn multirow resizebox scalebox graphicspath lstinputlisting includepdf index nomenclature SI si num qty unit phantom hphantom vphantom'.split())
 NOARGS = set('maketitle tableofcontents clearpage newpage pagebreak noindent indent par item appendix centering raggedright raggedleft hfill vfill small footnotesize scriptsize tiny large Large LARGE huge Huge normalsize today TeX LaTeX LaTeXe relax protect leavevmode and quad qquad ldots dots medskip bigskip smallskip topsep toprule midrule bottomrule hline textwidth linewidth columnwidth columnsep baselineskip textheight fill begingroup endgroup bfseries itshape normalfont rmfamily sffamily ttfamily selectfont'.split())
 NOARGS.update({'vskip','hskip'})
 OPAQUE.add('nocite')
 OPAQUE.update('icmlauthor icmlaffiliation icmlcorrespondingauthor icmlsetsymbol printAffiliationsAndNotice icmlEqualContribution'.split())
+OPAQUE.update({'aistatsauthor','aistatsaddress'})
 TOKEN_RE = re.compile(r'§LATEX_REF_\d+§')
 COMMAND_RE = re.compile(r'\\([A-Za-z@]+|[^\r\n])\*?')
 LETTERS = re.compile(r'[A-Za-z]{3,}')
@@ -44,6 +51,10 @@ INLINE_WRAPPERS = set('textbf textit textsl textsc textrm textsf texttt textnorm
 MATH_LEAVES = set('alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa lambda mu nu xi pi varpi rho varrho sigma varsigma tau upsilon phi varphi chi psi omega Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega infty partial nabla sum prod int log exp sin cos tan min max lim cdot times pm mp leq geq neq approx in notin subset subseteq cup cap forall exists to mapsto rightarrow leftarrow checkmark ell'.split())
 MATH_WRAPPERS = set('mathcal mathbb mathrm mathbf mathit mathsf mathtt operatorname overline underline hat bar vec dot ddot'.split())
 DEFINITIONS = {'newcommand','renewcommand','providecommand','DeclareRobustCommand','def','gdef','edef','xdef','let'}
+# Only explicitly understood primitive assignments are accepted. Expressions,
+# register aliases and expandable numeric macros must still fail closed.
+INTEGER_ASSIGNMENTS = {'looseness'}
+INTEGER_LITERAL_RE = re.compile(r'[0-9]+')
 
 
 def skip_space(text, pos):
@@ -237,7 +248,13 @@ def unmask_latex_tokens(text, mapping, escape=False):
         result.append(fragment)
     for m in TOKEN_RE.finditer(text):
         append(escape_prose(text[p:m.start()]))
-        append(mapping[m.group()])
+        raw = mapping[m.group()]
+        append(raw)
+        # The source may use "\\looseness=-1Many...". A translated paragraph
+        # can start with a digit, so a space/control-word delimiter alone is
+        # insufficient: terminate TeX's integer scan outside the frozen atom.
+        if re.match(r'\\(?:'+ '|'.join(sorted(INTEGER_ASSIGNMENTS)) +r')(?![A-Za-z@])', raw):
+            append(r'\relax ')
         p = m.end()
     append(escape_prose(text[p:]))
     return ''.join(result)
@@ -440,8 +457,43 @@ class ProjectPlan:
                     if enabled:
                         for op,a,b in args:self._scan(path,text,a+1,b-1,State(active=True),kind='column_header')
                     i=argend;continue
+                if name=='H' and enabled:
+                    # Standard LaTeX double-acute accent, e.g. Erd\H{o}s.
+                    # Consume only a proven literal character, not arbitrary
+                    # expandable arguments. User redefinitions are still
+                    # checked through MacroRules.note_use above.
+                    p=skip_space(text,end)
+                    if p>=stop:raise IntegrityError('Missing accent argument in '+path.name)
+                    if text[p]=='{':
+                        end=balanced(text,p)
+                        letter=text[p+1:end-1]
+                    else:
+                        end=p+1;letter=text[p:end]
+                    if end>stop or not re.fullmatch(r'[A-Za-z]',letter):
+                        raise IntegrityError('Unsupported accent argument \\H in '+path.name)
+                    emit(i,end);i=end;continue
+                if name in INTEGER_ASSIGNMENTS and enabled:
+                    p=skip_space(text,end)
+                    if p<stop and text[p]=='=':p=skip_space(text,p+1)
+                    if p<stop and text[p] in '+-':p=skip_space(text,p+1)
+                    number=INTEGER_LITERAL_RE.match(text,p,stop)
+                    if not number:
+                        raise IntegrityError('Unsupported integer assignment \\'+name+' in '+path.name)
+                    end=number.end()
+                    # Decimal points and expression operators are not a
+                    # supported integer value; never guess how TeX consumes it.
+                    if end<stop and text[end] in '.+-*/':
+                        raise IntegrityError('Unsupported integer assignment \\'+name+' in '+path.name)
+                    emit(i,end);i=end;continue
+                if name=='ensuremath' and enabled:
+                    p=skip_space(text,end)
+                    if p>=stop or text[p]!='{':
+                        raise IntegrityError('Expected grouped \\ensuremath in '+path.name)
+                    end=balanced(text,p)
+                    if end>stop:raise IntegrityError('Unclosed math at '+path.name)
+                    emit(i,end);i=end;continue
                 is_caption=name in {'caption','captionof'}
-                allowed=(enabled or (is_caption and state.active and any(e in TABLE_ENVS|FIGURE_ENVS for e in state.envs)) or (name in {'title','subtitle','icmltitlerunning','keywords'} and not state.active))
+                allowed=(enabled or (is_caption and state.active and any(e in TABLE_ENVS|FIGURE_ENVS|ALGORITHM_ENVS for e in state.envs)) or (name in {'title','subtitle','icmltitlerunning','keywords','icmlkeywords','runningtitle','aistatstitle'} and not state.active))
                 if name in TEXT_ARGS and allowed:
                     self.macros.note_use(name,path)
                     flush();args,argend=arguments(text,end,limit=max(TEXT_ARGS[name])+1)

@@ -117,6 +117,13 @@ class MacroCompatibilityTests(Case):
 
 
 class ArchiveCompatibilityTests(Case):
+    def assertNeedsReview(self, result, output):
+        self.assertFalse(result)
+        manifest=json.loads((output/'translation_manifest.json').read_text(encoding='utf-8'))
+        self.assertEqual(manifest['status'],'review_required')
+        self.assertEqual(manifest['mode'],'pdf_fallback')
+        self.assertEqual(z.pdf_info(output/'chinese_mono.pdf')['pages'],1)
+
     def fallback(self, pdf, output, **kwargs):
         make_pdf(Path(output)/'chinese_mono.pdf', chinese=True)
         lc.make_side_by_side_dual_pdf(pdf, Path(output)/'chinese_mono.pdf', Path(output)/'bilingual_dual.pdf')
@@ -131,7 +138,7 @@ class ArchiveCompatibilityTests(Case):
         before=original.read_bytes();mtime=original.stat().st_mtime_ns
         (out/'notes.txt').write_text('User notes')
         for _ in range(2):
-            self.assertTrue(self.run_local(original,out))
+            self.assertNeedsReview(self.run_local(original,out),out)
             self.assertEqual(original.read_bytes(),before)
             self.assertEqual(original.stat().st_mtime_ns,mtime)
             manifest=json.loads((out/'translation_manifest.json').read_text(encoding='utf-8'))
@@ -141,7 +148,7 @@ class ArchiveCompatibilityTests(Case):
     def test_matching_pdf_copy_is_adopted(self):
         source=self.root/'download.pdf';make_pdf(source)
         out=self.root/'archive';out.mkdir();shutil.copy2(source,out/'original.pdf')
-        self.assertTrue(self.run_local(source,out))
+        self.assertNeedsReview(self.run_local(source,out),out)
 
     def test_mismatched_preexisting_original_rejected_before_network(self):
         source=self.root/'download.pdf';make_pdf(source)
@@ -163,7 +170,7 @@ class ArchiveCompatibilityTests(Case):
         out=self.root/'archive';out.mkdir();original=out/'original.pdf';make_pdf(original)
         before=original.read_bytes()
         with patch.object(z,'fetch_arxiv_source',return_value=False),patch.object(z,'download_arxiv_pdf') as download,patch.object(pr,'run_pdf_translation',side_effect=self.fallback):
-            self.assertTrue(z.auto_translate_paper('2601.12345',out,config={},original=original))
+            self.assertNeedsReview(z.auto_translate_paper('2601.12345',out,config={},original=original),out)
             download.assert_not_called()
         self.assertEqual(original.read_bytes(),before)
 
@@ -171,7 +178,7 @@ class ArchiveCompatibilityTests(Case):
         source=self.project('The paper contains an English paragraph.');make_pdf(source/'original.pdf')
         out=self.root/'archive';out.mkdir();shutil.copy2(source/'original.pdf',out/'original.pdf')
         with patch.object(z,'process_latex_project',side_effect=RuntimeError('controlled failure')),patch.object(pr,'run_pdf_translation',side_effect=self.fallback):
-            self.assertTrue(z.auto_translate_paper(str(source),out,config={}))
+            self.assertNeedsReview(z.auto_translate_paper(str(source),out,config={}),out)
 
     def test_untracked_translations_still_rejected(self):
         source=self.root/'input.pdf';make_pdf(source)
@@ -207,7 +214,7 @@ class ArchiveCompatibilityTests(Case):
         digest=z.sha256(original)
         (out/'translation_manifest.json').write_text(json.dumps({'input_identity':z._identity(str(source),exclude=[out]),'original_provenance':'recompiled_untouched_source','artifacts':{'original.pdf':{'sha256':digest}}}))
         with patch.object(z,'compile_latex_project') as compiler,patch.object(z,'process_latex_project',side_effect=RuntimeError('controlled failure')),patch.object(pr,'run_pdf_translation',side_effect=self.fallback):
-            self.assertTrue(z.auto_translate_paper(str(source),out,config={}))
+            self.assertNeedsReview(z.auto_translate_paper(str(source),out,config={}),out)
             compiler.assert_not_called()
         self.assertEqual(z.sha256(original),digest)
         self.assertEqual(json.loads((out/'translation_manifest.json').read_text())['original_provenance'],'recompiled_untouched_source')

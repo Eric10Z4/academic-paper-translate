@@ -22,13 +22,13 @@
 
 1. 多文件双栏工程：caption 可选参数、数学表达式、跨文件表格、正文百分号、BibTeX 和引用。要求 `complete_native`，冻结行文件、公式和引用键保持一致。
 2. 仅有 bbl 的工程：无 bib 文件仍能编译，交付 ZIP 保留 bbl 并能独立重编译。
-3. 无公开源码的本地 PDF：要求 `complete_fallback`，标准三 PDF 齐全，页面数不丢失。
-4. 无法编译的源码加原 PDF：要求自动进入降级并保留未编译源码 ZIP。
+3. 无公开源码的本地 PDF：程序阶段必须为 `review_required`，标准三 PDF 齐全，页面数不丢失；真实查看页面后才能 finalize 为 `complete_fallback`。
+4. 无法编译的源码加原 PDF：要求自动进入待视觉核验的降级并暂存未编译源码 ZIP；验收后默认删除本次源码和包。
 5. 格式化缩写、嵌套宏、def、let 和 ensuremath 的双栏工程：目标目录预存匹配 original.pdf，要求 complete_native，宏定义文件与表格行字节不变，交付源码包重编译成功。
 6. 同一宏工程续跑：复用此前真实翻译且重新通过完整性检查的缓存，仍要求原生编译成功。
 7. 以归档目录内 original.pdf 为输入、其父目录为输出：完成真实 PDF 降级，原文件内容与修改时间均保持不变。
 
-每个场景必须检查输入文件散列不变、manifest 实际状态、PDF 可读性、页数和源码包内容。编译、合成和源码 ZIP 重编译记录均位于本次 `.translation/runs` 目录。至少渲染并人工查看实际交付 PDF 的代表页面，包括公式、表格和尾页；自动测试不能取代视觉和语义检查。
+每个场景必须检查输入文件散列不变、manifest 实际状态、PDF 可读性、页数和源码包内容。编译、合成和源码 ZIP 重编译记录均位于本次 `.translation/runs` 目录。渲染并查看中文 PDF 的全部页面，对公式、分数、算法和表格放大核对，并检查尾页完整；自动测试不能取代视觉和语义检查。
 
 ## 额外验收与已知边界
 
@@ -40,9 +40,15 @@ PDF 降级采用视觉版面识别，不能宣称表格和公式具有 TeX 源�
 
 ## 依赖和上游参考
 
-主流程依赖锁定见 requirements.txt。PDF 降级封装固定使用 pdf2zh-next 2.9.0；参数按该版本的配置模型核对：
+主流程依赖锁定见 requirements.txt。PDF 降级封装固定使用 pdf2zh-next 2.9.0 / BabelDOC 0.6.2；参数按该版本的配置模型核对：
 
 - https://github.com/PDFMathTranslate-next/PDFMathTranslate-next/tree/v2.9.0/pdf2zh_next/config
 - 环境变量使用 `PDF2ZH_` 前缀；图表保护开启，`PDF2ZH_TRANSLATE_TABLE_TEXT=false`；API 凭证仅通过环境变量传递。
 
 升级任一核心依赖后重跑上述用例，禁止只更新版本号而沿用旧验收结论。
+
+## 分数、算法与收尾回归
+
+用 Hermes 启动 `tests/run_formula_acceptance.py --workspace 隔离目录 --case inline_native`，验证嵌套分数、偏导数、ensuremath、算法标题与算法主体；真实 SCORE 场景使用 `--case score --source-project /path/to/score-source --original /path/to/score.pdf`，输入须为相匹配的 SCORE（arXiv:2203.04413）原始源码与英文 PDF；仓库不附论文文件，也不写死本机路径。`--case pdf_only` 用相同公式样例验证降级和待检查状态，程序返回测试通过不表示其排版通过。所有产物仍须实际渲染查看。
+
+`test_native_formula.py` 覆盖分数原子和算法结构；`test_source_acquisition.py` 区分网络失败、PDF响应和入口歧义；`test_delivery.py` 覆盖绑定散列、页码、活动锁、输入保护、路径边界、链接和清理后的日志保留。失败/未检查的产物不得清理，检查通过后默认只交付三PDF及核验记录，源码归档可按用户要求保留。

@@ -14,6 +14,8 @@ BEGIN='% HERMES-TRANSLATE CHINESE BEGIN'
 END='% HERMES-TRANSLATE CHINESE END'
 FONT_BEGIN='% HERMES-TRANSLATE LEGACY FONT BEGIN'
 FONT_END='% HERMES-TRANSLATE LEGACY FONT END'
+MICROTYPE_BEGIN='% HERMES-TRANSLATE MICROTYPE PROTRUSION BEGIN'
+MICROTYPE_END='% HERMES-TRANSLATE MICROTYPE PROTRUSION END'
 
 
 def without_comments(text):
@@ -85,6 +87,23 @@ def inject_legacy_font_support(tex_path,families):
     path.write_bytes(content.encode('utf-8'))
 
 
+def inject_microtype_protrusion_compatibility(tex_path):
+    """Disable only protrusion after the template has loaded its packages."""
+    path=Path(tex_path);content=read_utf8(path)
+    content=re.sub(re.escape(MICROTYPE_BEGIN)+r'.*?'+re.escape(MICROTYPE_END)+r'\r?\n?', '',content,flags=re.S)
+    match=re.search(r'\\begin\s*\{document\}',without_comments(content))
+    if not match:raise ValueError('No document environment for microtype compatibility')
+    block='\n'.join([MICROTYPE_BEGIN,r'\microtypesetup{protrusion=false}',MICROTYPE_END])+'\n'
+    path.write_bytes((content[:match.start()]+block+content[match.start():]).encode('utf-8'))
+
+
+def _microtype_protrusion_conflict(log):
+    # Require both the precise XeTeX font failure and its adjacent microtype
+    # protrusion stack frame. Other font/package errors must not trigger this.
+    failure=re.search(r'Cannot\s+use\s+\\?XeTeXglyph\b.{0,300}?;\s*not a native platform font',log,re.S)
+    return bool(failure and 'MT@get@char@unit' in log[failure.end():failure.end()+500])
+
+
 def _run(cmd,cwd,timeout,env,logfile):
     try:
         p=subprocess.run(cmd,cwd=cwd,env=env,capture_output=True,timeout=timeout)
@@ -108,31 +127,40 @@ def compile_latex_project(project_dir,main_tex_path=None,timeout=180,chinese=Tru
     if not shutil.which('xelatex'):return False,None,'XeLaTeX is not installed or not on PATH'
     build=root/'.build'/uuid.uuid4().hex
     report={'attempts':[],'success':False}
-    attempts=[(mode,()) for mode in (['ctex','xecjk'] if chinese else ['original'])]
-    for attempt_index,(base_mode,legacy_families) in enumerate(attempts):
-        mode=base_mode+('_legacyfonts' if legacy_families else '')
+    attempts=[(mode,(),False) for mode in (['ctex','xecjk'] if chinese else ['original'])]
+    microtype_retried=set()
+    for attempt_index,(base_mode,legacy_families,disable_protrusion) in enumerate(attempts):
+        mode=base_mode+('_legacyfonts' if legacy_families else '')+('_microtype' if disable_protrusion else '')
         attempt=build/mode;copy_project(root,attempt)
         entry=attempt/main.relative_to(root);cwd=entry.parent;stem=entry.stem
         inject=False
         if chinese:inject=inject_chinese_support(entry,fallback_xecjk=base_mode=='xecjk')
         if legacy_families:inject_legacy_font_support(entry,legacy_families)
+        if disable_protrusion:inject_microtype_protrusion_compatibility(entry)
+        protrusion_disabled=MICROTYPE_BEGIN in read_utf8(entry)
         expected=cwd/(stem+'.pdf')
         if expected.exists():expected.unlink()
         env=os.environ.copy()
         for key in ['TEXINPUTS','BIBINPUTS','BSTINPUTS']:
             env[key]=str(attempt).replace('\\','/')+'//'+os.pathsep+env.get(key,'')
         cmd=['xelatex','--disable-installer','-no-shell-escape','-interaction=nonstopmode','-halt-on-error','-file-line-error',entry.name]
-        attempt_log={'mode':mode,'passes':[],'injected':inject,'legacy_font_families':list(legacy_families)};report['attempts'].append(attempt_log)
+        attempt_log={'mode':mode,'passes':[],'injected':inject,'legacy_font_families':list(legacy_families),
+                     'microtype_protrusion_disabled':protrusion_disabled};report['attempts'].append(attempt_log)
         failed=False;previous=None;converged=False
         for n in range(1,max_passes+1):
             rc,stdout=_run(cmd,cwd,timeout,env,cwd/f'hermes-pass-{n}.txt')
             attempt_log['passes'].append({'engine':'xelatex','number':n,'returncode':rc})
             log=(cwd/(stem+'.log')).read_bytes().decode('utf-8',errors='replace') if (cwd/(stem+'.log')).exists() else stdout
             if rc!=0:
+                attempt_log['missing_files']=sorted(set(re.findall(r"File [`']([^`'\n]+)['`] not found",log)))
+                if not protrusion_disabled and base_mode not in microtype_retried and _microtype_protrusion_conflict(log):
+                    microtype_retried.add(base_mode)
+                    attempts.insert(attempt_index+1,(base_mode,legacy_families,True))
+                    attempt_log['retry_reason']='XeTeX non-native font in microtype protrusion; retry with protrusion disabled'
                 attempt_log['error']=log[-6000:];failed=True;break
             missing_legacy=sorted(set(re.findall(r"Font shape [`']TU/(ptm|phv|pcr)/",log)))
             if missing_legacy and not legacy_families:
-                attempts.insert(attempt_index+1,(base_mode,tuple(missing_legacy)))
+                attempts.insert(attempt_index+1,(base_mode,tuple(missing_legacy),disable_protrusion))
                 attempt_log['error']='Legacy font encoding incompatible; retry with an explicit Unicode font for '+','.join(missing_legacy)
                 failed=True;break
             if n==1:
@@ -162,7 +190,7 @@ def compile_latex_project(project_dir,main_tex_path=None,timeout=180,chinese=Tru
         attempt_log.update({'pdf':info,'layout_warnings':warnings})
         report.update({'success':True,'selected_mode':mode,'pdf':str(expected),'layout_warnings':warnings})
         atomic_json(build/'compile_report.json',report)
-        if chinese and (inject or legacy_families):main.write_bytes(entry.read_bytes())
+        if chinese and (inject or legacy_families or disable_protrusion):main.write_bytes(entry.read_bytes())
         return True,str(expected),json_summary(report,build/'compile_report.json')
     atomic_json(build/'compile_report.json',report)
     return False,None,json_summary(report,build/'compile_report.json')
@@ -170,7 +198,9 @@ def compile_latex_project(project_dir,main_tex_path=None,timeout=180,chinese=Tru
 
 def json_summary(report,path):
     import json
-    return json.dumps({'success':report['success'],'report':str(path),'layout_warnings':report.get('layout_warnings',[]),'errors':[a.get('error','')[-2000:] for a in report['attempts'] if a.get('error')]},ensure_ascii=False)
+    return json.dumps({'success':report['success'],'report':str(path),'layout_warnings':report.get('layout_warnings',[]),
+        'missing_files':sorted({name for a in report['attempts'] for name in a.get('missing_files',[])}),
+        'errors':[a.get('error','')[-2000:] for a in report['attempts'] if a.get('error')]},ensure_ascii=False)
 
 
 def make_side_by_side_dual_pdf(original_pdf_path,mono_pdf_path,output_dual_pdf_path):
@@ -224,7 +254,7 @@ def pack_source_zip(project_dir,output_zip_path):
     generated_pdf=Path(main).with_suffix('.pdf') if main else None
     paths=[p for p in project_files(root,[output]) if p!=generated_pdf and p.name not in {'original.pdf','chinese_mono.pdf','bilingual_dual.pdf'} and not p.name.startswith('hermes-pass-')]
     temp=output.with_name(output.name+'.tmp')
-    with zipfile.ZipFile(temp,'w',zipfile.ZIP_DEFLATED) as z:
+    with zipfile.ZipFile(temp,'w',zipfile.ZIP_DEFLATED,strict_timestamps=False) as z:
         for p in paths:
             if p==temp:continue
             z.write(p,p.relative_to(root).as_posix())
