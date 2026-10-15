@@ -11,3 +11,5 @@ must not be published.
 
 Use the root README and SKILL.md for current commands, configuration and limits.
 Use VERSION for the current code version.
+
+Latest: [v2.2.0 formula and finalization validation](v2.2.0-formula-validation.md).

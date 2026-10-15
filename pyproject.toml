@@ -37,7 +37,7 @@ package-dir = { academic_paper_translate = "." }
 include-package-data = false
 
 [tool.setuptools.package-data]
-academic_paper_translate = ["VERSION", "prompts/*.txt", "config.example.json"]
+academic_paper_translate = ["VERSION", "prompts/*.txt", "config.example.json", "SKILL.md", "AUDIT_SPEC.md", "references/*.md"]
 
 [tool.setuptools.dynamic]
 version = { file = "VERSION" }

@@ -126,24 +126,39 @@ def verify_arxiv_pdf_identity(local_pdf, arxiv_id, reference_pdf):
 def fetch_arxiv_source(arxiv_id,target_dir):
     target=Path(target_dir);target.mkdir(parents=True,exist_ok=True)
     archive=target.parent/(target.name+'.download.gz')
+    acquisition={'arxiv_id':arxiv_id,'status':'request_started','source_available':None}
     try:
         _download('https://arxiv.org/e-print/'+arxiv_id,archive)
         header=archive.read_bytes()[:8]
-        if header.startswith(b'%PDF'):return False
+        if header.startswith(b'%PDF'):
+            acquisition.update(status='endpoint_returned_pdf',source_available=False)
+            return False
         if tarfile.is_tarfile(archive):safe_extract_tar(archive,target)
         else:
             if header.startswith(b'\x1f\x8b'):
                 with gzip.open(archive,'rb') as f:data=f.read(64*1024*1024+1)
             else:data=archive.read_bytes()
-            if len(data)>64*1024*1024 or data.startswith(b'%PDF'):return False
+            if len(data)>64*1024*1024:raise ValueError('Source download exceeds decompressed size limit')
+            if data.startswith(b'%PDF'):
+                acquisition.update(status='endpoint_returned_pdf',source_available=False)
+                return False
             text=data.decode('utf-8')
-            if '\\documentclass' not in text:return False
+            if '\\documentclass' not in text:
+                acquisition.update(status='unrecognized_response',source_available=None)
+                return False
             (target/'main.tex').write_bytes(data)
-        return bool(find_main_tex(target))
+        tex_files=[p.relative_to(target).as_posix() for p in target.rglob('*.tex')]
+        acquisition.update(status='source_downloaded' if tex_files else 'no_supported_tex_files',
+                           source_available=True if tex_files else None,tex_files=tex_files)
+        # Entry selection is a separate step: --main must be usable for archives
+        # that include both the paper and conference template examples.
+        return bool(tex_files)
     except Exception as e:
-        print('Source unavailable:',type(e).__name__,str(e)[:200]);return False
+        acquisition.update(status='retrieval_failed',error_type=type(e).__name__,detail=str(e)[:500])
+        print('Source retrieval failed (availability not established):',type(e).__name__,str(e)[:200]);return False
     finally:
         if archive.exists():archive.unlink()
+        atomic_json(target.parent/'source_acquisition.json',acquisition)
 
 
 def process_latex_project(project_dir,adapter=None,prompt_template=None,max_workers=4,main_tex=None,cache_path=None):
@@ -168,9 +183,15 @@ def process_latex_project(project_dir,adapter=None,prompt_template=None,max_work
 
     def worker(segment):
         error=None
-        for attempt in range(2):
+        for attempt in range(3):
             try:
-                answer=adapter.translate(segment.masked,prompt_template)
+                retry_prompt=prompt_template
+                if attempt:
+                    retry_prompt += ('\n\nThe previous translation was rejected by the integrity validator: '+str(error)+'. '
+                        'Translate again without commentary. Keep all protected markers in their source order, '
+                        'including adjacent markers; do not reorder clauses across markers. Required marker sequence: '
+                        +' '.join(segment.mapping)+'.')
+                answer=adapter.translate(segment.masked,retry_prompt)
                 segment.restore(answer)
                 return segment.key,answer
             except (IntegrityError,ValueError) as e:error=e
@@ -279,8 +300,13 @@ def _auto_translate_paper(input_target,output_dir=None,provider='cpa',max_worker
         identity+=':original:'+sha256(original)
     previous=final/'translation_manifest.json'
     adoption = _check_output(final, identity, supplied)
+    prior=json.loads(previous.read_text(encoding='utf-8')) if previous.exists() else {}
     run=final/'.translation'/'runs'/uuid.uuid4().hex;run.mkdir(parents=True)
     manifest={'schema_version':2,'skill_version':VERSION,'input_identity':identity,'status':'running','input':str(input_target),'provider':provider,'run_dir':str(run),'errors':[],'warnings':[]}
+    manifest['source_acquisition']={'status':'not_attempted','source_available':None}
+    manifest['prior_source_archives']={name:details for name,details in
+        {**prior.get('prior_source_archives',{}),**prior.get('artifacts',{})}.items()
+        if name in {'chinese_source.zip','chinese_source_uncompiled.zip'}}
     if adoption: manifest['original_adoption'] = adoption
     atomic_json(previous,manifest)
     originals=run/'original.pdf';source=None;arxiv_id=None;translated=None
@@ -296,6 +322,7 @@ def _auto_translate_paper(input_target,output_dir=None,provider='cpa',max_worker
             manifest['original_provenance']=adoption['provenance']
         if target.is_dir():
             source=copy_project(target,run/'source',exclude=[final])
+            manifest['source_acquisition']={'status':'user_supplied_project','source_available':True}
         elif target.is_file() and target.suffix.lower()=='.pdf':
             try:
                 arxiv_id=find_arxiv_id_from_pdf(target)
@@ -329,10 +356,19 @@ def _auto_translate_paper(input_target,output_dir=None,provider='cpa',max_worker
             manifest['arxiv_id']=arxiv_id
             if not originals.exists() and download_arxiv_pdf(arxiv_id,originals):manifest['original_provenance']='arxiv_pdf'
             if fetch_arxiv_source(arxiv_id,run/'source'):source=run/'source'
-        if source and not main_tex and not find_main_tex(source):
-            manifest['errors'].append({'stage':'source','detail':'No usable TeX entry'})
-            pack_source_zip(source,run/'chinese_source_uncompiled.zip')
-            source=None
+            report=run/'source_acquisition.json'
+            if report.exists():
+                manifest['source_acquisition']=json.loads(report.read_text(encoding='utf-8'))
+                if manifest['source_acquisition'].get('status')=='retrieval_failed':
+                    manifest['errors'].append({'stage':'source_retrieval','detail':manifest['source_acquisition'].get('detail','')})
+        if source and not main_tex:
+            try:
+                if not find_main_tex(source):raise ValueError('No usable TeX entry in downloaded source')
+            except ValueError as e:
+                manifest['errors'].append({'stage':'source_entry','detail':str(e)})
+                manifest['warnings'].append('Source exists but its entry could not be selected; supply --main. This is not evidence of missing source.')
+                pack_source_zip(source,run/'chinese_source_uncompiled.zip')
+                source=None
         if source:
             entry=(source/main_tex).resolve() if main_tex else Path(find_main_tex(source) or '')
             if not entry.is_file():raise ValueError('No valid TeX entry')
@@ -377,6 +413,10 @@ def _auto_translate_paper(input_target,output_dir=None,provider='cpa',max_worker
                 raise RuntimeError('PDF fallback did not produce verified artifacts')
             manifest['mode']='pdf_fallback'
             manifest['warnings'].append('PDF fallback does not provide byte-level TeX/table integrity guarantees.')
+            fallback_record=run/'fallback_report.json'
+            if fallback_record.exists():
+                manifest['fallback']=json.loads(fallback_record.read_text(encoding='utf-8'))
+            manifest['warnings'].append('Visual inspection required: inline fractions, display formulas and algorithm line structure can be damaged by PDF reflow.')
         required=['original.pdf','chinese_mono.pdf','bilingual_dual.pdf']
         info={name:pdf_info(run/name) for name in required}
         if info['bilingual_dual.pdf']['pages']!=max(info['original.pdf']['pages'],info['chinese_mono.pdf']['pages']):raise ValueError('Dual page count mismatch')
@@ -396,14 +436,20 @@ def _auto_translate_paper(input_target,output_dir=None,provider='cpa',max_worker
         manifest['artifacts']={name:(info[name] if name in info else {'sha256':sha256(final/name),'bytes':(final/name).stat().st_size}) for name in required}
         warnings=manifest.get('compile',{}).get('layout_warnings',[])
         manifest['warnings'].extend(warnings)
-        manifest['status']='review_required' if warnings else ('complete_native' if manifest['mode']=='latex_native' else 'complete_fallback')
+        manifest['status']='review_required' if warnings or manifest['mode']=='pdf_fallback' else 'complete_native'
+        manifest['visual_review']={'status':'pending','checks':['inline_fractions','display_math','algorithm_structure','clipping']}
+        manifest['cleanup']={'status':'pending_visual_review','policy':'remove_owned_sources_and_archives_after_review'}
         atomic_json(previous,manifest)
         print('Translation status:',manifest['status'])
         print('Verified output:',final)
         return manifest['status'] in {'complete_native','complete_fallback'}
     except Exception as e:
         manifest['status']='failed';manifest['errors'].append({'stage':'workflow','detail':str(e)[:10000]})
-        if (run/'chinese_source_uncompiled.zip').exists():shutil.copy2(run/'chinese_source_uncompiled.zip',final/'chinese_source_uncompiled.zip')
+        if (run/'chinese_source_uncompiled.zip').exists():
+            shutil.copy2(run/'chinese_source_uncompiled.zip',final/'chinese_source_uncompiled.zip')
+            manifest.setdefault('artifacts',{})['chinese_source_uncompiled.zip']={
+                'sha256':sha256(final/'chinese_source_uncompiled.zip'),
+                'bytes':(final/'chinese_source_uncompiled.zip').stat().st_size}
         atomic_json(previous,manifest)
         print('Translation failed:',str(e)[:1200]);return False
 
@@ -433,14 +479,24 @@ def doctor():
 def main():
     p=argparse.ArgumentParser(description='Hermes verified academic paper translation')
     group=p.add_mutually_exclusive_group()
-    for flag in ['--input','--arxiv','--dir','--pdf']:group.add_argument(flag)
+    for flag in ['--input','--arxiv','--dir','--pdf','--finalize']:group.add_argument(flag)
     p.add_argument('--output-dir');p.add_argument('--original');p.add_argument('--main')
     p.add_argument('--config');p.add_argument('--provider',choices=['cpa','deepseek','ollama'],default='cpa')
     p.add_argument('--workers',type=int,default=4);p.add_argument('--compile-timeout',type=int,default=180)
     p.add_argument('--prompt',choices=['zotero_default','cs_ai_specialized','math_formula_preservation'],default='zotero_default')
     p.add_argument('--no-fallback',action='store_true');p.add_argument('--doctor',action='store_true')
+    p.add_argument('--visual-review',help='JSON record of rendered-page inspection, required with --finalize')
+    p.add_argument('--keep-source',action='store_true',help='Keep tracked source archives when finalizing a reviewed delivery')
     args=p.parse_args()
     if args.doctor:return 0 if doctor() else 2
+    if args.finalize:
+        if not args.visual_review:p.error('--finalize requires --visual-review')
+        try:
+            from .delivery import finalize_delivery
+            result=finalize_delivery(args.finalize,args.visual_review,args.keep_source)
+            print('Translation status:',result['status']);print('Cleanup status:',result['cleanup']['status'])
+            return 0
+        except Exception as e:print('Finalization failed:',str(e));return 2
     target=args.input or args.arxiv or args.dir or args.pdf
     if not target:p.print_help();return 2
     if not 1<=args.workers<=16:p.error('--workers must be 1..16')

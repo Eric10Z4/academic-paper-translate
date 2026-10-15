@@ -56,6 +56,19 @@ class Case(unittest.TestCase):
 
 
 class ParserTests(Case):
+    def test_integrity_retry_has_feedback_without_weakening_token_check(self):
+        class RetryAdapter(FakeAdapter):
+            def __init__(self):super().__init__();self.prompts=[]
+            def translate(self,text,prompt):
+                self.calls.append(text);self.prompts.append(prompt)
+                return '遗漏了公式' if len(self.calls)==1 else '该结果为'+''.join(TOKEN_RE.findall(text))
+        adapter=RetryAdapter()
+        root=self.project(r'The result is $\frac{a}{b}$.')
+        z.process_latex_project(root,adapter,max_workers=1)
+        self.assertEqual(len(adapter.calls),2)
+        self.assertIn('Required marker sequence',adapter.prompts[1])
+        self.assertIn(r'$\frac{a}{b}$',(root/'main.tex').read_text())
+
     def test_dynamic_table_macros_cannot_leak_data(self):
         body=r'\documentclass{article}\newcommand{\openrows}{\begin{table}\begin{tabular}{lr}}\newcommand{\closerows}{\end{tabular}\end{table}}\begin{document}\openrows MethodAlpha & 90.3 \\ \closerows\end{document}'
         root=self.project(body,wrap=False);adapter=FakeAdapter()
@@ -175,6 +188,19 @@ class ParserTests(Case):
 
 
 class CompilerTests(Case):
+    def test_missing_package_is_reported_as_dependency_not_absent_source(self):
+        root=self.project('Some prose.')
+        with patch.object(lc.shutil,'which',return_value='xelatex'),patch.object(lc,'_run',return_value=(1,"! LaTeX Error: File `missing.sty' not found.")):
+            ok,_,report=lc.compile_latex_project(root)
+        self.assertFalse(ok)
+        self.assertEqual(json.loads(report)['missing_files'],['missing.sty'])
+    def test_source_archive_accepts_old_arxiv_timestamps(self):
+        root=self.project('The source has an old timestamp.')
+        os.utime(root/'main.tex',(1,1))
+        archive=self.root/'source.zip';lc.pack_source_zip(root,archive)
+        with zipfile.ZipFile(archive) as package:
+            self.assertEqual(package.read('main.tex'),(root/'main.tex').read_bytes())
+            self.assertEqual(package.getinfo('main.tex').date_time[0],1980)
     def test_legacy_font_shim_does_not_replace_template(self):
         root=self.project('Hello world.');p=root/'main.tex'
         lc.inject_legacy_font_support(p,['ptm']);lc.inject_legacy_font_support(p,['ptm'])
@@ -255,14 +281,17 @@ class RoutingTests(Case):
             make_pdf(Path(out)/'chinese_mono.pdf',chinese=True);lc.make_side_by_side_dual_pdf(pdf,Path(out)/'chinese_mono.pdf',Path(out)/'bilingual_dual.pdf');return True
         with patch.object(z,'find_arxiv_id_from_pdf',return_value=None),patch.object(z,'verify_arxiv_pdf_identity',return_value=False),patch.object(z,'fetch_arxiv_source',return_value=False),patch.object(pr,'run_pdf_translation',side_effect=fallback) as fb:
             ok=z.auto_translate_paper(str(path),self.root/'out',config={})
-        self.assertTrue(ok);fb.assert_called_once()
+        self.assertFalse(ok);fb.assert_called_once()
+        self.assertEqual(json.loads((self.root/'out/translation_manifest.json').read_text())['status'],'review_required')
+        self.assertEqual(pdf_info(self.root/'out/chinese_mono.pdf')['pages'],1)
     def test_translation_exception_enters_fallback_and_input_unchanged(self):
         root=self.project('Hello world.');make_pdf(root/'original.pdf');before=(root/'main.tex').read_bytes()
         def fallback(pdf,out,**kwargs):
             make_pdf(Path(out)/'chinese_mono.pdf',chinese=True);lc.make_side_by_side_dual_pdf(pdf,Path(out)/'chinese_mono.pdf',Path(out)/'bilingual_dual.pdf');return True
         with patch.object(z,'process_latex_project',side_effect=TimeoutError('simulated timeout')),patch.object(pr,'run_pdf_translation',side_effect=fallback) as fb:
             ok=z.auto_translate_paper(str(root),self.root/'out',config={})
-        self.assertTrue(ok);fb.assert_called_once();self.assertEqual(before,(root/'main.tex').read_bytes())
+        self.assertFalse(ok);fb.assert_called_once();self.assertEqual(before,(root/'main.tex').read_bytes())
+        self.assertEqual(json.loads((self.root/'out/translation_manifest.json').read_text())['status'],'review_required')
         self.assertTrue((self.root/'out/chinese_source_uncompiled.zip').exists())
     def test_fallback_empty_outputs_is_failure(self):
         original=self.root/'original.pdf';make_pdf(original)
