@@ -170,7 +170,7 @@ Successful delivery requires `visual_review.status=passed` and `cleanup.status=c
 
 ## Validation and limits
 
-- **v2.2: 152 local regression tests, 149 passed and 3 skipped for Windows link privileges.** Real Hermes validation covered a fraction fixture and the full SCORE paper: 246 validated segments, three 13-page PDFs, archive rebuild, and inspection of every Chinese page. Both native deliveries completed cleanup. See the [v2.2 validation record](docs/v2.2.0-formula-validation.md).
+- **v2.2: 153 local regression tests, 150 passed and 3 skipped for Windows link privileges.** Real Hermes validation covered a fraction fixture and the full SCORE paper: 246 validated segments, three 13-page PDFs, archive rebuild, and inspection of every Chinese page. Both native deliveries completed cleanup. See the [v2.2 validation record](docs/v2.2.0-formula-validation.md).
 
 - The fixes following v2.1.1 recorded 92 passing deterministic tests, including source identity and complete numeric token protection. Those checks remain in the current suite.
 - **v2.1: 86 deterministic regression tests passed; 7 Hermes end-to-end scenarios reached their expected outcomes**, covering native compilation, PDF fallback, safe macros, existing originals, and cached reruns. A direct CLI invocation was also verified through Hermes. See the [v2.1 report](docs/v2.1.0-修复与Hermes复验报告.md).

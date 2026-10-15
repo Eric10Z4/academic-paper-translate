@@ -84,6 +84,11 @@ def finalize_delivery(output_dir, review_path, keep_source=False):
         _reject_links(run)
         if run.parent.resolve() != runs.resolve() or not re.fullmatch(r'[0-9a-f]{32}', run.name):
             raise ValueError('Run path is not an owned output workspace')
+        # Windows manifests may use an 8.3 alias while final is resolved to its
+        # long name. Use the verified owner directory before any deletion or
+        # lexical relative-path operation; otherwise recording cleanup can fail.
+        run = runs/run.name
+        run_relative = run.relative_to(final)
         # No mutation until the entire deletion set and the PDFs have been checked.
         if run.exists():
             for folder, dirs, files in os.walk(run, followlinks=False):
@@ -127,7 +132,7 @@ def finalize_delivery(output_dir, review_path, keep_source=False):
         if run.exists():
             # Resolved absolute target was checked above; never delete arbitrary .tex/ZIPs.
             shutil.rmtree(run)
-            removed.append(str(run.relative_to(final)))
+            removed.append(str(run_relative))
         manifest['visual_review'] = {'status':'passed', 'record':'visual_review.json',
                                    'reviewer':review['reviewer'], 'pages':review['reviewed_pages']}
         manifest['status'] = 'complete_native' if manifest['mode']=='latex_native' else 'complete_fallback'

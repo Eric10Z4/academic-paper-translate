@@ -115,6 +115,16 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(result['cleanup']['status'],'complete')
         self.assertEqual(result['cleanup']['removed'],[])
 
+    def test_owned_run_alias_is_canonicalized_before_cleanup(self):
+        alias=self.run.parent/'..'/'runs'/self.run.name
+        self.manifest['run_dir']=str(alias);self.save()
+        result=self.finalize()
+        expected=str(Path('.translation')/'runs'/self.run.name)
+        self.assertIn(expected,result['cleanup']['removed'])
+        self.assertTrue(all('..' not in Path(p).parts for p in result['cleanup']['removed']))
+        self.assertFalse(self.run.exists())
+        self.assertEqual(self.finalize()['cleanup']['status'],'complete')
+
     def test_atomic_json_does_not_follow_predictable_temp_link(self):
         target=self.base/'record.json';outside=self.base/'outside.txt';outside.write_text('original')
         old_temp=self.base/'record.json.tmp'

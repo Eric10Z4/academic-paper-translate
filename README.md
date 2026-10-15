@@ -170,7 +170,7 @@ python -B scripts/zotero_translate.py --finalize "./output/paper" --visual-revie
 
 ## 已验证范围与限制
 
-- **v2.2：本机 152 项回归，149 项通过、3 项因 Windows 链接权限跳过。** Hermes 真实完成行内分数小样例与 SCORE 全文原生复验；SCORE 246 个片段校验通过、三份 PDF 均为 13 页、源码 ZIP 重编译及逐页视觉核验通过。小样例和 SCORE 均完成收尾。详见 [v2.2 记录](docs/v2.2.0-formula-validation.md)。
+- **v2.2：本机 153 项回归，150 项通过、3 项因 Windows 链接权限跳过。** Hermes 真实完成行内分数小样例与 SCORE 全文原生复验；SCORE 246 个片段校验通过、三份 PDF 均为 13 页、源码 ZIP 重编译及逐页视觉核验通过。小样例和 SCORE 均完成收尾。详见 [v2.2 记录](docs/v2.2.0-formula-validation.md)。
 
 - v2.1.1 后续修复记录为 92 项确定性回归通过，覆盖来源误匹配和完整数值保护；这些检查继续保留在当前测试集中。
 - **v2.1：86 项确定性回归通过；7 个 Hermes 端到端场景完成预期结果**，覆盖原生编译、PDF 降级、安全宏、预存原文、缓存续跑等。另通过 Hermes 验证了直接 CLI 入口。详见 [v2.1 报告](docs/v2.1.0-修复与Hermes复验报告.md)。
